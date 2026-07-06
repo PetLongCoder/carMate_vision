@@ -24,7 +24,7 @@ export function uploadPoliceGestureVideo(file: File) {
   formData.append('file', file);
   return request.post<ApiResponse<PoliceGestureResult>>('/police-gesture/recognize', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
+    timeout: 600000,
   });
 }
 
