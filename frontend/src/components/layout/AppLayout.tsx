@@ -1,5 +1,6 @@
-import React from 'react';
-import { Layout, Menu, Button, Badge, Tooltip } from 'antd';
+import React, { useMemo } from 'react';
+import { Layout, Menu, Button, Badge, Tooltip, Dropdown, Tag, Space } from 'antd';
+import type { MenuProps } from 'antd';
 import {
   CarOutlined,
   CameraOutlined,
@@ -10,29 +11,70 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   BellOutlined,
+  UserOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
+import { useAuthStore } from '../../store/authStore';
+import type { UserRole } from '../../types';
 
 const { Sider, Content } = Layout;
 
-const menuItems = [
-  { key: '/', icon: <CarOutlined />, label: '控制面板' },
-  { key: '/plate', icon: <CameraOutlined />, label: '车牌识别' },
-  { key: '/police-gesture', icon: <HighlightOutlined />, label: '交警手势' },
-  { key: '/driver-gesture', icon: <AimOutlined />, label: '车主手势' },
-  { key: '/alerts', icon: <AlertOutlined />, label: '告警中心' },
-  { key: '/history', icon: <HistoryOutlined />, label: '历史记录' },
+const allMenuItems: Array<{
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  roles: UserRole[];
+}> = [
+  { key: '/', icon: <CarOutlined />, label: '控制面板', roles: ['admin'] },
+  { key: '/plate', icon: <CameraOutlined />, label: '车牌识别', roles: ['user', 'admin'] },
+  { key: '/police-gesture', icon: <HighlightOutlined />, label: '交警手势', roles: ['user', 'admin'] },
+  { key: '/driver-gesture', icon: <AimOutlined />, label: '车主手势', roles: ['user', 'admin'] },
+  { key: '/alerts', icon: <AlertOutlined />, label: '告警中心', roles: ['admin'] },
+  { key: '/history', icon: <HistoryOutlined />, label: '历史记录', roles: ['user', 'admin'] },
 ];
 
-const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+const AppLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { sidebarCollapsed, toggleSidebar, unreadCount } = useAppStore();
+  const { user, logout, isAdmin } = useAuthStore();
+
+  const menuItems = useMemo(
+    () =>
+      allMenuItems
+        .filter((item) => user && item.roles.includes(user.role))
+        .map((item) => ({
+          key: item.key,
+          icon: item.icon,
+          label:
+            item.key === '/alerts' && unreadCount > 0 ? (
+              <span>
+                {item.label}
+                <Badge count={unreadCount} size="small" style={{ marginLeft: 8 }} />
+              </span>
+            ) : (
+              item.label
+            ),
+        })),
+    [user, unreadCount],
+  );
+
+  const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'logout',
+      icon: <LogoutOutlined />,
+      label: '退出登录',
+      onClick: () => {
+        logout();
+        navigate('/login', { replace: true });
+      },
+    },
+  ];
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      {/* 侧边栏 */}
       <Sider
         trigger={null}
         collapsible
@@ -64,23 +106,13 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           theme="dark"
           mode="inline"
           selectedKeys={[location.pathname]}
-          items={menuItems.map((item) => ({
-            ...item,
-            label: item.key === '/alerts' && unreadCount > 0 ? (
-              <span>
-                {item.label}
-                <Badge count={unreadCount} size="small" style={{ marginLeft: 8 }} />
-              </span>
-            ) : item.label,
-          }))}
+          items={menuItems}
           onClick={({ key }) => navigate(key)}
           style={{ borderInlineEnd: 'none' }}
         />
       </Sider>
 
-      {/* 主区域 */}
       <Layout>
-        {/* 顶部栏 */}
         <div
           style={{
             height: 64,
@@ -101,18 +133,27 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
           />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <Tooltip title="告警通知">
-              <Badge count={unreadCount} size="small">
-                <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} onClick={() => navigate('/alerts')} />
-              </Badge>
-            </Tooltip>
-            <span style={{ color: '#666', fontSize: 14 }}>
-              CarMate 智能车载视觉系统
-            </span>
+            {isAdmin() && (
+              <Tooltip title="告警通知">
+                <Badge count={unreadCount} size="small">
+                  <BellOutlined
+                    style={{ fontSize: 18, cursor: 'pointer' }}
+                    onClick={() => navigate('/alerts')}
+                  />
+                </Badge>
+              </Tooltip>
+            )}
+
+            <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
+              <Space style={{ cursor: 'pointer' }}>
+                <UserOutlined />
+                <span>{user?.username}</span>
+                <Tag color={isAdmin() ? 'gold' : 'blue'}>{isAdmin() ? '管理员' : '普通用户'}</Tag>
+              </Space>
+            </Dropdown>
           </div>
         </div>
 
-        {/* 内容区 */}
         <Content
           style={{
             margin: 24,
@@ -123,7 +164,7 @@ const AppLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
             overflow: 'auto',
           }}
         >
-          {children}
+          <Outlet />
         </Content>
       </Layout>
     </Layout>

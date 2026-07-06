@@ -71,3 +71,54 @@ export interface ApiResponse<T> {
   message: string;
   data: T;
 }
+
+// 用户认证
+export type UserRole = 'user' | 'admin';
+
+export interface User {
+  id: number;
+  username: string;
+  email?: string;
+  phone?: string;
+  role: UserRole;
+}
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface PhoneLoginRequest {
+  phone: string;
+  code: string;
+}
+
+export interface EmailLoginRequest {
+  email: string;
+  code: string;
+}
+
+export type CodeScene = 'login' | 'register';
+
+export interface SendSmsCodeRequest {
+  phone: string;
+  scene: CodeScene;
+}
+
+export interface SendEmailCodeRequest {
+  email: string;
+  scene: CodeScene;
+}
+
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  phone: string;
+  code: string;
+  email?: string;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: User;
+}
