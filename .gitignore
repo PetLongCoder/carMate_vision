@@ -2,6 +2,9 @@ node_modules
 
 # Backend - 大型文件不提交
 backend/ctpgr/checkpoints/
+!backend/ctpgr/checkpoints/
+backend/ctpgr/checkpoints/*
+!backend/ctpgr/checkpoints/README.md
 backend/ctpgr/generated/
 backend/ctpgr/.git.backup/
 backend/ctpgr/__pycache__/
