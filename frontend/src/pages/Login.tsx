@@ -6,6 +6,7 @@ import { login, loginByPhone, loginByEmail, sendSmsCode, sendEmailCode } from '.
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
 import { emailFormRules } from '../utils/validation';
+import { notifyAuthError } from '../utils/notifyAuthError';
 import type { AuthResponse, UserRole } from '../types';
 
 const { Title, Text } = Typography;
@@ -47,7 +48,7 @@ const Login: React.FC = () => {
     try {
       finishLogin(await login(values));
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '登录失败');
+      notifyAuthError(err, navigate);
     } finally {
       setLoading(false);
     }
@@ -58,7 +59,7 @@ const Login: React.FC = () => {
     try {
       finishLogin(await loginByPhone(values));
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '登录失败');
+      notifyAuthError(err, navigate);
     } finally {
       setLoading(false);
     }
@@ -69,32 +70,40 @@ const Login: React.FC = () => {
     try {
       finishLogin(await loginByEmail(values));
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '登录失败');
+      notifyAuthError(err, navigate);
     } finally {
       setLoading(false);
     }
   };
 
   const handleSendSmsCode = async () => {
-    const phone = phoneForm.getFieldValue('phone');
-    await phoneForm.validateFields(['phone']);
-    await sendSmsCode({ phone });
-    message.success(
-      import.meta.env.DEV
-        ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
-        : '验证码已发送',
-    );
+    try {
+      const phone = phoneForm.getFieldValue('phone');
+      await phoneForm.validateFields(['phone']);
+      await sendSmsCode({ phone, scene: 'login' });
+      message.success(
+        import.meta.env.DEV
+          ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+          : '验证码已发送',
+      );
+    } catch (err) {
+      notifyAuthError(err, navigate);
+    }
   };
 
   const handleSendEmailCode = async () => {
-    const email = emailForm.getFieldValue('email');
-    await emailForm.validateFields(['email']);
-    await sendEmailCode({ email });
-    message.success(
-      import.meta.env.DEV
-        ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
-        : '验证码已发送',
-    );
+    try {
+      const email = emailForm.getFieldValue('email');
+      await emailForm.validateFields(['email']);
+      await sendEmailCode({ email, scene: 'login' });
+      message.success(
+        import.meta.env.DEV
+          ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+          : '验证码已发送',
+      );
+    } catch (err) {
+      notifyAuthError(err, navigate);
+    }
   };
 
   const roleTabItems = [
@@ -238,8 +247,8 @@ const Login: React.FC = () => {
           </Form>
         )}
 
-        {activeRole === 'user' && loginMethod === 'password' && (
-          <div style={{ textAlign: 'center' }}>
+        {activeRole === 'user' && (
+          <div style={{ textAlign: 'center', marginTop: 12 }}>
             <Text type="secondary">还没有账号？</Text>{' '}
             <Link to="/register">立即注册</Link>
           </div>

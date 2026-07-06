@@ -1,5 +1,6 @@
 import request from './request';
 import { isValidEmail } from '../utils/validation';
+import { AuthError } from '../utils/authError';
 import type {
   ApiResponse,
   AuthResponse,
@@ -89,11 +90,24 @@ function toAuthResponse(user: User): AuthResponse {
   };
 }
 
+function findByPhone(phone: string) {
+  return getMockUsers().find((u) => u.phone === phone);
+}
+
+function findByEmail(email: string) {
+  return getMockUsers().find((u) => u.email === email);
+}
+
 function mockLogin(data: LoginRequest): AuthResponse {
   const users = getMockUsers();
-  const found = users.find((u) => u.username === data.username && u.password === data.password);
+  const found = users.find((u) => u.username === data.username);
+
   if (!found) {
-    throw new Error('用户名或密码错误');
+    throw new AuthError('该用户名未注册，请先注册', 'NOT_REGISTERED');
+  }
+
+  if (found.password !== data.password) {
+    throw new Error('密码错误');
   }
 
   const { password: _, ...user } = found;
@@ -114,13 +128,13 @@ function mockRegister(data: RegisterRequest): AuthResponse {
 
   const users = getMockUsers();
   if (users.some((u) => u.username === data.username)) {
-    throw new Error('用户名已存在');
+    throw new AuthError('该用户名已注册，请前往登录', 'ALREADY_REGISTERED');
   }
   if (users.some((u) => u.phone === data.phone)) {
-    throw new Error('该手机号已被注册');
+    throw new AuthError('该手机号已注册，请前往登录', 'ALREADY_REGISTERED');
   }
   if (data.email && users.some((u) => u.email === data.email)) {
-    throw new Error('该邮箱已被使用');
+    throw new AuthError('该邮箱已注册，请前往登录', 'ALREADY_REGISTERED');
   }
   if (data.email && !isValidEmail(data.email)) {
     throw new Error('请输入正确的邮箱格式，如 user@example.com');
@@ -145,6 +159,17 @@ function mockSendSmsCode(data: SendSmsCodeRequest) {
   if (!/^1[3-9]\d{9}$/.test(data.phone)) {
     throw new Error('请输入正确的手机号');
   }
+
+  const exists = !!findByPhone(data.phone);
+
+  if (data.scene === 'login' && !exists) {
+    throw new AuthError('该手机号未注册，请先注册', 'NOT_REGISTERED');
+  }
+
+  if (data.scene === 'register' && exists) {
+    throw new AuthError('该手机号已注册，请前往登录', 'ALREADY_REGISTERED');
+  }
+
   const code = generateCode();
   saveMockCode(`phone:${data.phone}`, code);
   return code;
@@ -154,6 +179,17 @@ function mockSendEmailCode(data: SendEmailCodeRequest) {
   if (!isValidEmail(data.email)) {
     throw new Error('请输入正确的邮箱格式，如 user@example.com');
   }
+
+  const exists = !!findByEmail(data.email);
+
+  if (data.scene === 'login' && !exists) {
+    throw new AuthError('该邮箱未注册，请先注册', 'NOT_REGISTERED');
+  }
+
+  if (data.scene === 'register' && exists) {
+    throw new AuthError('该邮箱已注册，请前往登录', 'ALREADY_REGISTERED');
+  }
+
   const code = generateCode();
   saveMockCode(`email:${data.email}`, code);
   return code;
@@ -162,20 +198,9 @@ function mockSendEmailCode(data: SendEmailCodeRequest) {
 function mockLoginByPhone(data: PhoneLoginRequest): AuthResponse {
   verifyMockCode(`phone:${data.phone}`, data.code);
 
-  const users = getMockUsers();
-  let found = users.find((u) => u.phone === data.phone);
-
+  const found = findByPhone(data.phone);
   if (!found) {
-    const newUser: MockUserRecord = {
-      id: Date.now(),
-      username: `user_${data.phone.slice(-4)}`,
-      password: '',
-      phone: data.phone,
-      role: 'user',
-    };
-    users.push(newUser);
-    saveMockUsers(users);
-    found = newUser;
+    throw new AuthError('该手机号未注册，请先注册', 'NOT_REGISTERED');
   }
 
   if (found.role !== 'user') {
@@ -189,20 +214,9 @@ function mockLoginByPhone(data: PhoneLoginRequest): AuthResponse {
 function mockLoginByEmail(data: EmailLoginRequest): AuthResponse {
   verifyMockCode(`email:${data.email}`, data.code);
 
-  const users = getMockUsers();
-  let found = users.find((u) => u.email === data.email);
-
+  const found = findByEmail(data.email);
   if (!found) {
-    const newUser: MockUserRecord = {
-      id: Date.now(),
-      username: data.email.split('@')[0],
-      password: '',
-      email: data.email,
-      role: 'user',
-    };
-    users.push(newUser);
-    saveMockUsers(users);
-    found = newUser;
+    throw new AuthError('该邮箱未注册，请先注册', 'NOT_REGISTERED');
   }
 
   if (found.role !== 'user') {
@@ -289,3 +303,5 @@ export async function getCurrentUser(): Promise<User> {
   const res = await request.get<ApiResponse<User>>('/auth/me');
   return res.data.data;
 }
+
+export { AuthError } from '../utils/authError';

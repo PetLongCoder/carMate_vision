@@ -13,6 +13,7 @@ import { register, sendSmsCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
 import { emailFormRules } from '../utils/validation';
+import { notifyAuthError } from '../utils/notifyAuthError';
 
 const { Title, Text } = Typography;
 
@@ -27,14 +28,18 @@ const Register: React.FC = () => {
   const setAuth = useAuthStore((s) => s.setAuth);
 
   const handleSendSmsCode = async () => {
-    const phone = form.getFieldValue('phone');
-    await form.validateFields(['phone']);
-    await sendSmsCode({ phone });
-    message.success(
-      import.meta.env.DEV
-        ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
-        : '验证码已发送',
-    );
+    try {
+      const phone = form.getFieldValue('phone');
+      await form.validateFields(['phone']);
+      await sendSmsCode({ phone, scene: 'register' });
+      message.success(
+        import.meta.env.DEV
+          ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+          : '验证码已发送',
+      );
+    } catch (err) {
+      notifyAuthError(err, navigate);
+    }
   };
 
   const handleNext = async () => {
@@ -67,9 +72,7 @@ const Register: React.FC = () => {
       message.success('注册成功，已自动登录');
       navigate('/plate', { replace: true });
     } catch (err) {
-      if (err instanceof Error && err.message) {
-        message.error(err.message);
-      }
+      notifyAuthError(err, navigate);
     } finally {
       setLoading(false);
     }

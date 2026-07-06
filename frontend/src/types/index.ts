@@ -98,12 +98,16 @@ export interface EmailLoginRequest {
   code: string;
 }
 
+export type CodeScene = 'login' | 'register';
+
 export interface SendSmsCodeRequest {
   phone: string;
+  scene: CodeScene;
 }
 
 export interface SendEmailCodeRequest {
   email: string;
+  scene: CodeScene;
 }
 
 export interface RegisterRequest {
