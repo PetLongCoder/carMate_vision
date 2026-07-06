@@ -9,7 +9,6 @@ const request = axios.create({
   },
 });
 
-// 请求拦截器
 request.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('token');
@@ -21,7 +20,6 @@ request.interceptors.request.use(
   (error) => Promise.reject(error),
 );
 
-// 响应拦截器
 request.interceptors.response.use(
   (response) => {
     const res = response.data as ApiResponse<unknown>;
