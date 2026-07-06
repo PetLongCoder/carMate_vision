@@ -1,4 +1,5 @@
 import request from './request';
+import { isValidEmail } from '../utils/validation';
 import type {
   ApiResponse,
   AuthResponse,
@@ -121,6 +122,9 @@ function mockRegister(data: RegisterRequest): AuthResponse {
   if (data.email && users.some((u) => u.email === data.email)) {
     throw new Error('该邮箱已被使用');
   }
+  if (data.email && !isValidEmail(data.email)) {
+    throw new Error('请输入正确的邮箱格式，如 user@example.com');
+  }
 
   const newUser: MockUserRecord = {
     id: Date.now(),
@@ -147,8 +151,8 @@ function mockSendSmsCode(data: SendSmsCodeRequest) {
 }
 
 function mockSendEmailCode(data: SendEmailCodeRequest) {
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) {
-    throw new Error('请输入正确的邮箱地址');
+  if (!isValidEmail(data.email)) {
+    throw new Error('请输入正确的邮箱格式，如 user@example.com');
   }
   const code = generateCode();
   saveMockCode(`email:${data.email}`, code);

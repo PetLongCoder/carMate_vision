@@ -12,6 +12,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { register, sendSmsCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
+import { emailFormRules } from '../utils/validation';
 
 const { Title, Text } = Typography;
 
@@ -143,7 +144,7 @@ const Register: React.FC = () => {
                   name="email"
                   label="邮箱（可选）"
                   extra="填写后可使用邮箱验证码登录"
-                  rules={[{ type: 'email', message: '请输入正确的邮箱地址' }]}
+                  rules={emailFormRules(false)}
                 >
                   <Input prefix={<MailOutlined />} placeholder="请输入邮箱" size="large" />
                 </Form.Item>

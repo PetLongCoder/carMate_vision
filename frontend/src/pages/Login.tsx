@@ -5,6 +5,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { login, loginByPhone, loginByEmail, sendSmsCode, sendEmailCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
+import { emailFormRules } from '../utils/validation';
 import type { AuthResponse, UserRole } from '../types';
 
 const { Title, Text } = Typography;
@@ -213,10 +214,7 @@ const Login: React.FC = () => {
             <Form.Item
               name="email"
               label="邮箱"
-              rules={[
-                { required: true, message: '请输入邮箱' },
-                { type: 'email', message: '请输入正确的邮箱地址' },
-              ]}
+              rules={emailFormRules(true)}
             >
               <Input prefix={<MailOutlined />} placeholder="请输入邮箱" size="large" />
             </Form.Item>

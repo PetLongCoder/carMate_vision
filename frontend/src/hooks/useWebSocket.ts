@@ -9,7 +9,7 @@ const RETRY_DELAY_MS = 5000;
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const retryCountRef = useRef(0);
-  const retryTimerRef = useRef<number>();
+  const retryTimerRef = useRef<number | undefined>(undefined);
   const addAlert = useAppStore((s) => s.addAlert);
 
   const clearRetryTimer = () => {
