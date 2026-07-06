@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Card, Upload, Button, Space, Tag, Table, message } from 'antd';
 import { CameraOutlined, InboxOutlined } from '@ant-design/icons';
 import { PageHeader, Empty } from '../components/common';
+import { uploadPlateImage } from '../api';
 import type { PlateResult } from '../types';
 
 const { Dragger } = Upload;
@@ -20,21 +21,40 @@ const PlateRecognition: React.FC = () => {
   const [results, setResults] = useState<PlateResult[]>([]);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [imageScale, setImageScale] = useState<{ x: number; y: number }>({ x: 1, y: 1 });
 
   const handleUpload = async (file: File) => {
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 1000));
+    setResults([]);
+    setImageScale({ x: 1, y: 1 });
+
+    // 先显示图片预览
     const reader = new FileReader();
     reader.onload = (e) => setPreviewImage(e.target?.result as string);
     reader.readAsDataURL(file);
 
-    setResults([
-      { carId: 1, plateNo: '沪A12345', color: 'blue', confidence: 0.987, bbox: { x: 50, y: 30, width: 200, height: 60 } },
-      { carId: 2, plateNo: '京B67890', color: 'green', confidence: 0.954, bbox: { x: 300, y: 100, width: 180, height: 55 } },
-    ]);
-    setLoading(false);
-    message.success('识别完成');
+    try {
+      const res = await uploadPlateImage(file);
+      if (res.data.code === 200) {
+        setResults(res.data.data);
+        message.success(res.data.message || '识别完成');
+      } else {
+        message.error(res.data.message || '识别失败');
+      }
+    } catch {
+      message.error('请求失败，请检查后端服务是否已启动');
+    } finally {
+      setLoading(false);
+    }
     return false;
+  };
+
+  const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    setImageScale({
+      x: img.clientWidth / img.naturalWidth,
+      y: img.clientHeight / img.naturalHeight,
+    });
   };
 
   return (
@@ -54,9 +74,9 @@ const PlateRecognition: React.FC = () => {
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           <Card title="图片预览" style={{ flex: '1 1 400px' }}>
             <div style={{ position: 'relative', display: 'inline-block' }}>
-              <img src={previewImage} alt="preview" style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }} />
+              <img src={previewImage} alt="preview" style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }} onLoad={handleImageLoad} />
               {results.map((r) => (
-                <div key={r.carId} style={{ position: 'absolute', left: r.bbox.x, top: r.bbox.y, width: r.bbox.width, height: r.bbox.height, border: '2px solid #1677ff', borderRadius: 4, pointerEvents: 'none' }}>
+                <div key={r.carId} style={{ position: 'absolute', left: r.bbox.x * imageScale.x, top: r.bbox.y * imageScale.y, width: r.bbox.width * imageScale.x, height: r.bbox.height * imageScale.y, border: '2px solid #1677ff', borderRadius: 4, pointerEvents: 'none' }}>
                   <span style={{ position: 'absolute', top: -24, left: 0, background: '#1677ff', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 12, whiteSpace: 'nowrap' }}>{r.plateNo}</span>
                 </div>
               ))}
