@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Button, Tabs, message, Typography } from 'antd';
+import { Card, Form, Input, Button, Tabs, Segmented, message, Typography } from 'antd';
 import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, MailOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { login, loginByPhone, loginByEmail, sendSmsCode, sendEmailCode } from '../api/auth';
@@ -111,14 +111,14 @@ const Login: React.FC = () => {
     { key: 'admin', label: '管理员登录' },
   ];
 
-  const methodTabItems =
+  const methodOptions =
     activeRole === 'user'
       ? [
-          { key: 'password', label: '账号密码' },
-          { key: 'phone', label: '手机验证码' },
-          { key: 'email', label: '邮箱验证码' },
+          { label: '账号密码', value: 'password' as LoginMethod },
+          { label: '手机验证码', value: 'phone' as LoginMethod },
+          { label: '邮箱验证码', value: 'email' as LoginMethod },
         ]
-      : [{ key: 'password', label: '账号密码' }];
+      : [];
 
   return (
     <div
@@ -148,17 +148,18 @@ const Login: React.FC = () => {
           }}
           items={roleTabItems}
           centered
-          style={{ marginBottom: 8 }}
-        />
-
-        <Tabs
-          activeKey={loginMethod}
-          onChange={(key) => setLoginMethod(key as LoginMethod)}
-          items={methodTabItems}
-          centered
-          size="small"
           style={{ marginBottom: 16 }}
         />
+
+        {methodOptions.length > 0 && (
+          <Segmented
+            block
+            value={loginMethod}
+            onChange={(value) => setLoginMethod(value as LoginMethod)}
+            options={methodOptions}
+            style={{ marginBottom: 20 }}
+          />
+        )}
 
         {loginMethod === 'password' && (
           <Form form={passwordForm} layout="vertical" onFinish={handlePasswordLogin} autoComplete="off">
