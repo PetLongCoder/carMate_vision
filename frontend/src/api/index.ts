@@ -28,6 +28,24 @@ export function uploadPoliceGestureVideo(file: File) {
   });
 }
 
+export function resetPoliceGestureStream(streamId = 'default') {
+  const formData = new FormData();
+  formData.append('stream_id', streamId);
+  return request.post<ApiResponse<{ streamId: string }>>('/police-gesture/stream/reset', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+}
+
+export function recognizePoliceGestureFrame(file: Blob, streamId = 'default') {
+  const formData = new FormData();
+  formData.append('file', file, 'frame.jpg');
+  formData.append('stream_id', streamId);
+  return request.post<ApiResponse<PoliceGestureResult>>('/police-gesture/stream/frame', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  });
+}
+
 // ---- 车主手势识别 ----
 export function uploadDriverGestureImage(file: File) {
   const formData = new FormData();

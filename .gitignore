@@ -9,7 +9,7 @@ __pycache__/
 *.onnx
 .hyperlpr3/
 
-# Backend - 大型文件不提交
+# Backend large/runtime files
 backend/ctpgr/checkpoints/
 !backend/ctpgr/checkpoints/
 backend/ctpgr/checkpoints/*
@@ -25,7 +25,11 @@ backend/runs/
 backend/test_gesture.mp4
 backend/*.log
 
-# 本地环境配置
+# Local environment files
 .env
 backend/.env
 frontend/.env
+
+# Local datasets and office temp files
+data/
+~$*.docx

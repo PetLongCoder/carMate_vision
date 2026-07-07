@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+﻿import React, { useState, useRef } from 'react';
 import { Card, Upload, Button, Space, Tag, Table, message } from 'antd';
 import { CameraOutlined, InboxOutlined } from '@ant-design/icons';
 import { PageHeader, Empty } from '../components/common';
@@ -89,7 +89,6 @@ const PlateRecognition: React.FC = () => {
   };
 
   const previewTitle = isVideo ? '视频预览' : '图片预览';
-  const previewSubtitle = isVideo ? '视频已上传，识别结果如下' : undefined;
 
   return (
     <div>

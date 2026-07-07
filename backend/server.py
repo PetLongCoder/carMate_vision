@@ -22,7 +22,7 @@ if DEVICE_MODE == "cpu":
 import cv2
 import numpy as np
 from PIL import Image
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 # ---- 将 ctpgr 加入路径 ----
@@ -50,6 +50,18 @@ GESTURE_NAMES_CN = [
 ]
 
 # ---- FastAPI ----
+GESTURE_NAMES_CN = [
+    "无手势",
+    "停止",
+    "直行",
+    "左转",
+    "左转待转",
+    "右转",
+    "变道",
+    "减速慢行",
+    "靠边停车",
+]
+
 from contextlib import asynccontextmanager
 
 @asynccontextmanager
@@ -77,6 +89,31 @@ app.add_middleware(
 _shared_pose = None   # 姿态估计模型 (45MB)
 _shared_bla = None     # 骨骼特征提取器
 _shared_lstm = None    # LSTM 手势分类模型 (60KB)
+
+
+_stream_states = {}
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        logger.warning("Invalid %s, fallback to %s", name, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except ValueError:
+        logger.warning("Invalid %s, fallback to %s", name, default)
+        return default
+
+
+VIDEO_SAMPLE_FPS = _env_float("CARMATE_VIDEO_SAMPLE_FPS", 15.0)
+LSTM_WARMUP_FRAMES = _env_int("CARMATE_LSTM_WARMUP_FRAMES", 15)
+SMOOTH_WINDOW = max(1, _env_int("CARMATE_SMOOTH_WINDOW", 5))
+MIN_SEGMENT_SECONDS = _env_float("CARMATE_MIN_SEGMENT_SECONDS", 0.6)
 
 
 def force_cpu_if_needed():
@@ -188,6 +225,102 @@ def resize_keep_ratio(img_bgr: np.ndarray, target_size=(512, 512)) -> np.ndarray
     return canvas
 
 
+def _smooth_frame_results(frame_results: list[dict]) -> list[dict]:
+    if not frame_results:
+        return []
+
+    half_window = SMOOTH_WINDOW // 2
+    smoothed = []
+    for idx, fr in enumerate(frame_results):
+        left = max(0, idx - half_window)
+        right = min(len(frame_results), idx + half_window + 1)
+        window = frame_results[left:right]
+        votes = {}
+        confs = {}
+        for item in window:
+            gid = item["gestureId"]
+            votes[gid] = votes.get(gid, 0) + 1
+            confs[gid] = confs.get(gid, 0.0) + item["confidence"]
+
+        # Prefer stronger average confidence when classes tie in the window.
+        best_gid = max(votes, key=lambda gid: (votes[gid], confs[gid] / votes[gid]))
+        best_conf = confs[best_gid] / votes[best_gid]
+
+        merged = dict(fr)
+        merged["rawGestureId"] = fr["gestureId"]
+        merged["rawGesture"] = fr["gesture"]
+        merged["rawConfidence"] = fr["confidence"]
+        merged["gestureId"] = int(best_gid)
+        merged["gesture"] = GESTURE_NAMES_CN[best_gid] if best_gid < len(GESTURE_NAMES_CN) else "未知"
+        merged["confidence"] = round(float(best_conf), 4)
+        smoothed.append(merged)
+
+    return smoothed
+
+
+def _build_segments(frame_results: list[dict]) -> list[dict]:
+    segments = []
+    seg_start = None
+    seg_gesture = None
+    last_time = frame_results[-1]["time"] if frame_results else 0
+
+    for fr in frame_results:
+        gid = fr["gestureId"]
+        if gid != seg_gesture:
+            if seg_start is not None and seg_gesture is not None and seg_gesture > 0:
+                end_time = fr["time"]
+                if end_time - seg_start["time"] >= MIN_SEGMENT_SECONDS:
+                    segments.append({
+                        "start": seg_start["time"],
+                        "end": end_time,
+                        "gesture": GESTURE_NAMES_CN[seg_gesture],
+                        "gestureId": seg_gesture,
+                    })
+            seg_start = fr
+            seg_gesture = gid
+
+    if seg_start is not None and seg_gesture is not None and seg_gesture > 0:
+        if last_time - seg_start["time"] >= MIN_SEGMENT_SECONDS:
+            segments.append({
+                "start": seg_start["time"],
+                "end": last_time,
+                "gesture": GESTURE_NAMES_CN[seg_gesture],
+                "gestureId": seg_gesture,
+            })
+
+    return segments
+
+
+def _vote_best_gesture(frame_results: list[dict]) -> tuple[int, float, list[dict]]:
+    valid_frames = frame_results[LSTM_WARMUP_FRAMES:] if len(frame_results) > LSTM_WARMUP_FRAMES else frame_results
+    gesture_scores = {}
+    gesture_counts = {}
+
+    for fr in valid_frames:
+        gid = fr["gestureId"]
+        if gid <= 0:
+            continue
+        gesture_scores[gid] = gesture_scores.get(gid, 0.0) + fr["confidence"]
+        gesture_counts[gid] = gesture_counts.get(gid, 0) + 1
+
+    if not gesture_scores:
+        return 0, 0.0, []
+
+    best_gesture_id = max(gesture_scores, key=lambda gid: (gesture_counts[gid], gesture_scores[gid]))
+    avg_confidence = gesture_scores[best_gesture_id] / gesture_counts[best_gesture_id]
+    total = max(1, len(valid_frames))
+    top5 = sorted(gesture_scores, key=lambda gid: (gesture_counts[gid], gesture_scores[gid]), reverse=True)[:5]
+    top5_list = [
+        {
+            "gesture": GESTURE_NAMES_CN[gid] if gid < len(GESTURE_NAMES_CN) else "未知",
+            "gestureId": gid,
+            "confidence": round(gesture_counts[gid] / total, 4),
+        }
+        for gid in top5
+    ]
+    return int(best_gesture_id), float(avg_confidence), top5_list
+
+
 @app.get("/api/health")
 async def health_check():
     import torch
@@ -197,6 +330,71 @@ async def health_check():
         "classes": len(GESTURE_NAMES_CN),
         "device": "cuda" if torch.cuda.is_available() else "cpu",
         "device_mode": DEVICE_MODE,
+    }
+
+
+@app.post("/api/police-gesture/stream/reset")
+async def reset_police_gesture_stream(stream_id: str = Form("default")):
+    _stream_states.pop(stream_id, None)
+    return {"code": 200, "message": "success", "data": {"streamId": stream_id}}
+
+
+@app.post("/api/police-gesture/stream/frame")
+async def recognize_police_gesture_stream_frame(
+    file: UploadFile = File(...),
+    stream_id: str = Form("default"),
+):
+    contents = await file.read()
+    try:
+        image = Image.open(io.BytesIO(contents))
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+    except Exception:
+        raise HTTPException(400, "无法解析摄像头帧")
+
+    img_array = np.array(image)
+    img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+    re_frame = resize_keep_ratio(img_bgr, (512, 512))
+
+    state = _stream_states.get(stream_id)
+    if state is None:
+        state = (_shared_lstm.h0(), _shared_lstm.c0())
+
+    start = time.time()
+    gesture_id, scores_arr, state = predict_video_frame(re_frame, state)
+    _stream_states[stream_id] = state
+    elapsed = time.time() - start
+
+    import torch
+    import torch.nn.functional as F
+
+    t = torch.from_numpy(scores_arr).float() if isinstance(scores_arr, np.ndarray) else scores_arr.float()
+    scores = F.softmax(t, dim=-1).tolist()
+    confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
+    gesture_cn = GESTURE_NAMES_CN[gesture_id] if gesture_id < len(GESTURE_NAMES_CN) else "未知"
+
+    top5 = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:5]
+    top5_list = [
+        {
+            "gesture": GESTURE_NAMES_CN[i] if i < len(GESTURE_NAMES_CN) else "未知",
+            "gestureId": i,
+            "confidence": round(float(score), 4),
+        }
+        for i, score in top5
+    ]
+
+    return {
+        "code": 200,
+        "message": "success",
+        "data": {
+            "streamId": stream_id,
+            "gesture": gesture_cn,
+            "gestureId": gesture_id,
+            "confidence": round(confidence, 4),
+            "timestamp": int(time.time() * 1000),
+            "top5": top5_list,
+            "inference_ms": round(elapsed * 1000, 1),
+        },
     }
 
 
@@ -285,12 +483,11 @@ async def _process_video(contents: bytes, file_ext: str, timestamp: int):
 
         # CTPGR 是序列模型，视频需要连续输入。长视频按 15fps 约每 0.5 秒采样一次，
         # 避免只抽 30 帧导致动作被跳过。
-        target_sample_fps = 2.0
+        target_sample_fps = min(VIDEO_SAMPLE_FPS, fps) if fps > 0 else VIDEO_SAMPLE_FPS
         sample_interval = max(1, int(round(fps / target_sample_fps))) if fps > 0 else 1
         logger.info(f"视频推理: {total_frames}帧, fps={fps:.1f}, 采样间隔={sample_interval}")
 
         start = time.time()
-        gesture_votes = {}
         frame_results = []
         frame_idx = 0
         processed = 0
@@ -314,8 +511,6 @@ async def _process_video(contents: bytes, file_ext: str, timestamp: int):
                 scores = probs.tolist() if hasattr(probs, 'tolist') else list(probs)
 
                 confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
-                if gesture_id > 0:
-                    gesture_votes[gesture_id] = gesture_votes.get(gesture_id, 0) + 1
 
                 # 记录每帧结果: 视频时间戳 + 手势
                 frame_seconds = frame_idx / fps if fps > 0 else 0
@@ -334,17 +529,15 @@ async def _process_video(contents: bytes, file_ext: str, timestamp: int):
         elapsed = time.time() - start
 
         # 取投票最多的手势
-        if gesture_votes:
-            best_gesture_id = max(gesture_votes, key=gesture_votes.get)
-        else:
-            best_gesture_id = 0
+        frame_results = _smooth_frame_results(frame_results)
+        best_gesture_id, avg_confidence, top5_list = _vote_best_gesture(frame_results)
+        smoothed_top5_list = top5_list
 
         # 计算平均置信度
-        best_confs = [f["confidence"] for f in frame_results if f["gestureId"] == best_gesture_id]
-        avg_confidence = float(np.mean(best_confs)) if best_confs else 0.0
         gesture_cn = GESTURE_NAMES_CN[best_gesture_id] if best_gesture_id < len(GESTURE_NAMES_CN) else "未知"
 
         # 手势分段: 合并连续的相同手势
+        gesture_votes = {}
         segments = []
         seg_start = None
         seg_gesture = None
@@ -378,6 +571,8 @@ async def _process_video(contents: bytes, file_ext: str, timestamp: int):
         ]
 
         duration = total_frames / fps if fps > 0 else 0
+        segments = _build_segments(frame_results)
+        top5_list = smoothed_top5_list
         logger.info(f"视频识别: {gesture_cn} ({processed}帧, {len(segments)}个手势段, {elapsed*1000:.0f}ms)")
 
         return {
@@ -390,6 +585,9 @@ async def _process_video(contents: bytes, file_ext: str, timestamp: int):
                 "inference_ms": round(elapsed * 1000, 1),
                 "video_duration": round(duration, 1),
                 "video_fps": round(fps, 1),
+                "sample_fps": round(target_sample_fps, 1),
+                "sample_interval": sample_interval,
+                "warmup_frames": min(LSTM_WARMUP_FRAMES, processed),
                 "frames_processed": processed,
                 "frames": frame_results,       # 每帧的手势
                 "segments": segments,           # 连续手势段
