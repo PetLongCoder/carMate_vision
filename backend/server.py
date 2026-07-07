@@ -899,11 +899,6 @@ async def _process_video(contents: bytes, file_ext: str, timestamp: int):
 
 
 # ---- 预留接口 ----
-@app.post("/api/plate/recognize")
-async def recognize_plate(file: UploadFile = File(...)):
-    return {"code": 200, "message": "车牌识别功能开发中", "data": []}
-
-
 @app.post("/api/driver-gesture/recognize")
 async def recognize_driver_gesture(file: UploadFile = File(...)):
     return {"code": 200, "message": "车主手势识别功能开发中", "data": {}}

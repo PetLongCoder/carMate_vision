@@ -88,12 +88,15 @@ class PlateRecognizer:
 
         results = []
         for code, (confidence, type_idx, box) in seen.items():
+            conf = round(float(confidence), 4)
+            if conf < 0.5:  # 低置信度丢弃，避免错误识别
+                continue
             x1, y1, x2, y2 = map(int, box)
             color = PLATE_COLOR_MAP.get(type_idx, "blue")
             results.append({
                 "plate_no": code,
                 "color": color,
-                "confidence": round(float(confidence), 4),
+                "confidence": conf,
                 "bbox": {
                     "x": x1,
                     "y": y1,
