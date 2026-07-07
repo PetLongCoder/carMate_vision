@@ -31,6 +31,7 @@ PLATE_COLOR_MAP = {
 
 # ─── COCO 车辆类别 ─────────────────────────────
 VEHICLE_CLASSES = [2, 5, 7]  # car, bus, truck
+COCO_CLASS_NAMES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
 
 def enhance_image(image: np.ndarray) -> np.ndarray:
@@ -114,33 +115,37 @@ class VehicleDetector:
         logger.info("YOLOv8 模型加载完成")
 
     def detect(self, image: np.ndarray) -> list[dict]:
-        """检测车辆，返回 bbox 列表"""
+        """检测车辆，返回 bbox + 类型（car/bus/truck）"""
         results = self.model(image, classes=VEHICLE_CLASSES,
                              conf=self.conf, verbose=False)
         vehicles = []
         if results[0].boxes is not None:
             boxes = results[0].boxes.xyxy.cpu().numpy()
             confs = results[0].boxes.conf.cpu().numpy()
-            for box, conf in zip(boxes, confs):
+            cls_ids = results[0].boxes.cls.cpu().numpy()
+            for box, conf, cls_id in zip(boxes, confs, cls_ids):
                 x1, y1, x2, y2 = map(int, box.tolist())
+                cls_int = int(cls_id)
                 vehicles.append({
                     "bbox": {"x": x1, "y": y1,
                              "width": x2 - x1, "height": y2 - y1},
                     "confidence": float(conf),
+                    "class_id": cls_int,
+                    "class_name": COCO_CLASS_NAMES.get(cls_int, "unknown"),
                 })
         return vehicles
 
 
-def _match_plate_to_vehicle(plate_bbox: dict, vehicle_bboxes: list[dict]) -> bool:
-    """判断车牌中心点是否在某个车辆框内"""
+def _match_plate_to_vehicle(plate_bbox: dict, vehicle_bboxes: list[dict]) -> Optional[dict]:
+    """判断车牌中心点在哪个车辆框内，返回匹配的车辆信息（含类型）"""
     px = plate_bbox["x"] + plate_bbox["width"] // 2
     py = plate_bbox["y"] + plate_bbox["height"] // 2
     for v in vehicle_bboxes:
         vb = v["bbox"]
         if vb["x"] <= px <= vb["x"] + vb["width"] and \
            vb["y"] <= py <= vb["y"] + vb["height"]:
-            return True
-    return False
+            return v
+    return None
 
 
 # ─── 模块级单例 ───────────────────────────
@@ -185,7 +190,7 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
     detector = get_detector()
     vehicles = detector.detect(image)
 
-    # 3. 组装结果
+    # 3. 组装结果（含车辆类型）
     results = []
     seen_plates = set()
     for i, plate in enumerate(plates):
@@ -193,9 +198,14 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
             continue
         seen_plates.add(plate["plate_no"])
 
+        # 匹配车牌所属车辆
+        matched_vehicle = _match_plate_to_vehicle(plate["bbox"], vehicles)
+        vehicle_type = matched_vehicle["class_name"] if matched_vehicle else "unknown"
+
         results.append({
             "carId": i + 1,
             "plateNo": plate["plate_no"],
+            "vehicleType": vehicle_type,
             "color": plate["color"],
             "confidence": plate["confidence"],
             "bbox": plate["bbox"],

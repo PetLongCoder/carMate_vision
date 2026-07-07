@@ -1,4 +1,10 @@
 node_modules
+__pycache__/
+*.pyc
+*.pt
+*.task
+*.onnx
+.hyperlpr3/
 
 # Backend - 大型文件不提交
 backend/ctpgr/checkpoints/
@@ -15,5 +21,3 @@ backend/frames/
 backend/runs/
 backend/test_gesture.mp4
 backend/*.log
-*.pyc
-__pycache__/

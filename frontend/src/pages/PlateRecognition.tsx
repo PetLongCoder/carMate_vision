@@ -1,14 +1,28 @@
 import React, { useState } from 'react';
 import { Card, Upload, Button, Space, Tag, Table, message } from 'antd';
-import { CameraOutlined, InboxOutlined } from '@ant-design/icons';
+import { CameraOutlined, InboxOutlined, CarOutlined } from '@ant-design/icons';
 import { PageHeader, Empty } from '../components/common';
 import { uploadPlateImage } from '../api';
 import type { PlateResult } from '../types';
 
 const { Dragger } = Upload;
 
+const VEHICLE_TYPE_MAP: Record<string, { label: string; color: string; icon: string }> = {
+  car: { label: '轿车', color: 'blue', icon: '🚗' },
+  bus: { label: '客车', color: 'purple', icon: '🚌' },
+  truck: { label: '卡车', color: 'orange', icon: '🚛' },
+  motorcycle: { label: '摩托车', color: 'cyan', icon: '🏍️' },
+  unknown: { label: '未知', color: 'default', icon: '🚘' },
+};
+
 const columns = [
-  { title: '车辆编号', dataIndex: 'carId', key: 'carId', width: 100 },
+  { title: '车辆编号', dataIndex: 'carId', key: 'carId', width: 90 },
+  { title: '车型', dataIndex: 'vehicleType', key: 'vehicleType', width: 100,
+    render: (t: string) => {
+      const info = VEHICLE_TYPE_MAP[t] || VEHICLE_TYPE_MAP.unknown;
+      return <Tag color={info.color}>{info.icon} {info.label}</Tag>;
+    },
+  },
   { title: '车牌号码', dataIndex: 'plateNo', key: 'plateNo',
     render: (text: string) => <Tag color="blue" style={{ fontSize: 16, fontWeight: 600 }}>{text}</Tag> },
   { title: '颜色', dataIndex: 'color', key: 'color',
@@ -77,7 +91,7 @@ const PlateRecognition: React.FC = () => {
               <img src={previewImage} alt="preview" style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }} onLoad={handleImageLoad} />
               {results.map((r) => (
                 <div key={r.carId} style={{ position: 'absolute', left: r.bbox.x * imageScale.x, top: r.bbox.y * imageScale.y, width: r.bbox.width * imageScale.x, height: r.bbox.height * imageScale.y, border: '2px solid #1677ff', borderRadius: 4, pointerEvents: 'none' }}>
-                  <span style={{ position: 'absolute', top: -24, left: 0, background: '#1677ff', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 12, whiteSpace: 'nowrap' }}>{r.plateNo}</span>
+                  <span style={{ position: 'absolute', top: -24, left: 0, background: '#1677ff', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 12, whiteSpace: 'nowrap' }}>{r.plateNo} · {VEHICLE_TYPE_MAP[r.vehicleType]?.label || r.vehicleType}</span>
                 </div>
               ))}
             </div>
