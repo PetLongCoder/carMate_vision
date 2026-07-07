@@ -21,7 +21,7 @@ import type { PoliceGestureResult } from '../types';
 import {
   recognizePoliceGestureFrame,
   resetPoliceGestureStream,
-  uploadPoliceGestureVideo,
+  streamPoliceGestureVideo,
 } from '../api';
 
 const GESTURE_LABELS: Record<number, string> = {
@@ -69,15 +69,21 @@ type StreamRecord = PoliceGestureResult & {
 
 const STREAM_ID = 'web-camera-police-gesture';
 const STREAM_INTERVAL_MS = 1200;
+const LIVE_LABEL_HOLD_SECONDS = 1.2;
 
 const getGestureLabel = (gestureId?: number, fallback?: string) => (
   gestureId === undefined ? '等待识别' : GESTURE_LABELS[gestureId] || fallback || '未知'
+);
+
+const getGestureColor = (gestureId?: number) => (
+  gestureId === undefined ? '#8c8c8c' : GESTURE_COLORS[gestureId] || '#8c8c8c'
 );
 
 const PoliceGesture: React.FC = () => {
   const [result, setResult] = useState<PoliceGestureResult | null>(null);
   const [top5, setTop5] = useState<Array<{ gesture: string; gestureId: number; confidence: number }>>([]);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
+  const [videoFileName, setVideoFileName] = useState('');
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [inferenceMs, setInferenceMs] = useState<number>(0);
@@ -97,6 +103,8 @@ const PoliceGesture: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
+  const uploadSeqRef = useRef(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
 
   const currentSegment = useMemo(() => (
     segments.find((seg) => playbackTime >= seg.start && playbackTime <= seg.end)
@@ -104,9 +112,18 @@ const PoliceGesture: React.FC = () => {
 
   const currentFrame = useMemo(() => {
     if (!frames.length) return undefined;
-    return frames.reduce((closest, frame) => (
-      Math.abs(frame.time - playbackTime) < Math.abs(closest.time - playbackTime) ? frame : closest
-    ), frames[0]);
+    const pastFrames = frames.filter((frame) => frame.time <= playbackTime);
+    const latestPastFrame = pastFrames[pastFrames.length - 1];
+    if (latestPastFrame && playbackTime - latestPastFrame.time <= LIVE_LABEL_HOLD_SECONDS) {
+      return latestPastFrame;
+    }
+
+    const futureFrame = frames.find((frame) => frame.time > playbackTime);
+    if (futureFrame && futureFrame.time - playbackTime <= LIVE_LABEL_HOLD_SECONDS) {
+      return futureFrame;
+    }
+
+    return latestPastFrame || futureFrame || frames[frames.length - 1];
   }, [frames, playbackTime]);
 
   const overlayGestureId = currentSegment?.gestureId ?? currentFrame?.gestureId;
@@ -115,9 +132,15 @@ const PoliceGesture: React.FC = () => {
     : loading
       ? '正在分析'
       : '等待标注';
-  const overlayColor = overlayGestureId !== undefined ? GESTURE_COLORS[overlayGestureId] : '#8c8c8c';
+  const overlayColor = getGestureColor(overlayGestureId);
 
   const handleUpload = async (file: File) => {
+    const uploadSeq = uploadSeqRef.current + 1;
+    uploadSeqRef.current = uploadSeq;
+    uploadAbortRef.current?.abort();
+    const abortController = new AbortController();
+    uploadAbortRef.current = abortController;
+
     setLoading(true);
     setProgress(0);
     setResult(null);
@@ -129,51 +152,82 @@ const PoliceGesture: React.FC = () => {
     setFps(0);
     setSampleFps(0);
     setPlaybackTime(0);
+    setVideoFileName(file.name);
 
     if (videoSrc) {
       URL.revokeObjectURL(videoSrc);
     }
+
     const objectUrl = URL.createObjectURL(file);
     setVideoSrc(objectUrl);
-
-    const progressTimer = window.setInterval(() => {
-      setProgress((p) => {
-        if (p >= 90) {
-          window.clearInterval(progressTimer);
-          return 90;
-        }
-        return p + 3;
-      });
-    }, 200);
+    message.success('视频已载入，后端开始边分析边返回结果');
 
     try {
-      const response = await uploadPoliceGestureVideo(file);
-      const data = (response.data as any).data || response.data;
+      await streamPoliceGestureVideo(
+        file,
+        ({ event, data }) => {
+          if (uploadSeqRef.current !== uploadSeq) return;
 
-      window.clearInterval(progressTimer);
-      setProgress(100);
-      setResult({
-        gesture: data.gesture,
-        gestureId: data.gestureId,
-        confidence: data.confidence,
-        timestamp: data.timestamp,
-      });
-      setTop5(data.top5 || []);
-      setInferenceMs(data.inference_ms || 0);
-      setFrames(data.frames || []);
-      setSegments(data.segments || []);
-      setDuration(data.video_duration || videoRef.current?.duration || 0);
-      setFps(data.video_fps || 0);
-      setSampleFps(data.sample_fps || 0);
-      message.success(`识别完成：${getGestureLabel(data.gestureId, data.gesture)}`);
+          if (event === 'meta') {
+            setDuration(Number(data.video_duration) || videoRef.current?.duration || 0);
+            setFps(Number(data.video_fps) || 0);
+            setSampleFps(Number(data.sample_fps) || 0);
+            return;
+          }
+
+          if (event === 'frame') {
+            const frame = data as FrameResult & { progress?: number };
+            setFrames((items) => [...items, frame]);
+            setProgress(Math.max(1, Math.min(99, Number(frame.progress) || 1)));
+            return;
+          }
+
+          if (event === 'done') {
+            const doneData = data as unknown as PoliceGestureResult & {
+              top5?: Array<{ gesture: string; gestureId: number; confidence: number }>;
+              inference_ms?: number;
+              frames?: FrameResult[];
+              segments?: Segment[];
+              video_duration?: number;
+              video_fps?: number;
+              sample_fps?: number;
+            };
+            setProgress(100);
+            setResult({
+              gesture: doneData.gesture,
+              gestureId: doneData.gestureId,
+              confidence: doneData.confidence,
+              timestamp: doneData.timestamp,
+            });
+            setTop5(doneData.top5 || []);
+            setInferenceMs(doneData.inference_ms || 0);
+            setFrames(doneData.frames || []);
+            setSegments(doneData.segments || []);
+            setDuration(doneData.video_duration || videoRef.current?.duration || 0);
+            setFps(doneData.video_fps || 0);
+            setSampleFps(doneData.sample_fps || 0);
+            message.success(`识别完成：${getGestureLabel(doneData.gestureId, doneData.gesture)}`);
+            return;
+          }
+
+          if (event === 'error') {
+            throw new Error((data as { message?: string }).message || '流式识别失败');
+          }
+        },
+        abortController.signal,
+      );
     } catch (error) {
-      window.clearInterval(progressTimer);
+      if (abortController.signal.aborted) return false;
+      if (uploadSeqRef.current !== uploadSeq) return false;
       setProgress(0);
       console.error('police gesture upload failed:', error);
       message.error('识别失败，请确认后端服务已启动');
+    } finally {
+      if (uploadSeqRef.current === uploadSeq) {
+        setLoading(false);
+      }
     }
 
-    setLoading(false);
     return false;
   };
 
@@ -261,20 +315,27 @@ const PoliceGesture: React.FC = () => {
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) window.clearInterval(timerRef.current);
-      streamRef.current?.getTracks().forEach((track) => track.stop());
       if (videoSrc) URL.revokeObjectURL(videoSrc);
     };
   }, [videoSrc]);
 
+  useEffect(() => {
+    return () => {
+      uploadSeqRef.current += 1;
+      uploadAbortRef.current?.abort();
+      if (timerRef.current) window.clearInterval(timerRef.current);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+    };
+  }, []);
+
   const streamLabel = getGestureLabel(streamResult?.gestureId, streamResult?.gesture);
-  const streamColor = streamResult ? GESTURE_COLORS[streamResult.gestureId] : '#8c8c8c';
+  const streamColor = getGestureColor(streamResult?.gestureId);
 
   return (
     <div>
       <PageHeader
         title="交警手势识别"
-        subtitle="基于人体关键点和 LSTM 时序特征识别 8 种中国标准交警指挥手势"
+        subtitle="上传视频后立即播放预览，后台基于连续帧时序分析并按播放时间标注动作"
         extra={
           <Space>
             {streaming ? (
@@ -301,7 +362,12 @@ const PoliceGesture: React.FC = () => {
                 ref={videoRef}
                 src={videoSrc}
                 controls
-                onLoadedMetadata={(event) => setDuration(event.currentTarget.duration || duration)}
+                muted
+                playsInline
+                onLoadedMetadata={(event) => {
+                  setDuration(event.currentTarget.duration || duration);
+                  void event.currentTarget.play().catch(() => undefined);
+                }}
                 onTimeUpdate={(event) => setPlaybackTime(event.currentTarget.currentTime)}
                 style={{ width: '100%', maxHeight: 430, display: 'block', background: '#000' }}
               />
@@ -338,7 +404,7 @@ const PoliceGesture: React.FC = () => {
               )}
             </div>
           ) : (
-            <Empty description="选择视频后会立即在这里预览" />
+            <Empty description="选择视频后会立即播放预览，识别完成后按时间标注动作" />
           )}
           <div style={{ marginTop: 16, textAlign: 'center' }}>
             <Upload accept="video/*" showUploadList={false} beforeUpload={handleUpload} disabled={loading}>
@@ -346,12 +412,12 @@ const PoliceGesture: React.FC = () => {
                 选择视频文件
               </Button>
             </Upload>
-            <div style={{ marginTop: 8, color: '#8c8c8c' }}>支持 MP4、AVI、MOV、WebM、MKV</div>
+            <div style={{ marginTop: 8, color: '#8c8c8c' }}>{videoFileName || '支持 MP4、AVI、MOV、WebM、MKV'}</div>
           </div>
           {loading && (
             <div style={{ margin: '18px auto 0', maxWidth: 420 }}>
               <Progress percent={progress} status="active" strokeColor="#1677ff" />
-              <span style={{ color: '#8c8c8c' }}>正在提取关键点并进行时序分类，视频可先预览播放</span>
+              <span style={{ color: '#8c8c8c' }}>正在连续提取关键点并进行 LSTM 时序分类，视频可先播放预览</span>
             </div>
           )}
         </Card>
@@ -359,14 +425,14 @@ const PoliceGesture: React.FC = () => {
         <Card title="视频识别结果">
           {result ? (
             <div style={{ textAlign: 'center' }}>
-              <Tag color={GESTURE_COLORS[result.gestureId]} style={{ fontSize: 22, padding: '6px 20px', marginBottom: 12 }}>
+              <Tag color={getGestureColor(result.gestureId)} style={{ fontSize: 22, padding: '6px 20px', marginBottom: 12 }}>
                 {getGestureLabel(result.gestureId, result.gesture)}
               </Tag>
               <Progress
                 type="circle"
                 percent={Math.round(result.confidence * 100)}
                 size={88}
-                strokeColor={GESTURE_COLORS[result.gestureId]}
+                strokeColor={getGestureColor(result.gestureId)}
               />
               <Descriptions size="small" column={1} style={{ marginTop: 12, textAlign: 'left' }}>
                 <Descriptions.Item label="推理耗时">{inferenceMs.toFixed(0)} ms</Descriptions.Item>
@@ -377,7 +443,7 @@ const PoliceGesture: React.FC = () => {
               {top5.length > 0 && (
                 <Space wrap style={{ marginTop: 8, justifyContent: 'center' }}>
                   {top5.map((item) => (
-                    <Tag key={item.gestureId} color={GESTURE_COLORS[item.gestureId]}>
+                    <Tag key={item.gestureId} color={getGestureColor(item.gestureId)}>
                       {getGestureLabel(item.gestureId, item.gesture)} {(item.confidence * 100).toFixed(0)}%
                     </Tag>
                   ))}
@@ -385,7 +451,7 @@ const PoliceGesture: React.FC = () => {
               )}
             </div>
           ) : (
-            <Empty description={loading ? '等待后端返回识别结果' : '上传视频后显示识别结果'} />
+            <Empty description={loading ? '等待后端返回时序识别结果' : '上传视频后显示识别结果'} />
           )}
         </Card>
       </div>
@@ -413,7 +479,7 @@ const PoliceGesture: React.FC = () => {
                     height: '100%',
                     border: 0,
                     borderRight: '2px solid #fff',
-                    background: GESTURE_COLORS[seg.gestureId],
+                    background: getGestureColor(seg.gestureId),
                     color: '#fff',
                     cursor: 'pointer',
                     fontWeight: 600,
@@ -428,7 +494,7 @@ const PoliceGesture: React.FC = () => {
             {segments.map((seg, index) => (
               <Tag
                 key={`${seg.end}-${index}`}
-                color={GESTURE_COLORS[seg.gestureId]}
+                color={getGestureColor(seg.gestureId)}
                 style={{ cursor: 'pointer', padding: '4px 10px' }}
                 onClick={() => seekTo(seg.start)}
               >
@@ -503,7 +569,7 @@ const PoliceGesture: React.FC = () => {
         <Card title="实时识别记录" style={{ marginTop: 16 }}>
           <Space wrap>
             {streamHistory.map((item, index) => (
-              <Tag key={`${item.timestamp}-${index}`} color={GESTURE_COLORS[item.gestureId]}>
+              <Tag key={`${item.timestamp}-${index}`} color={getGestureColor(item.gestureId)}>
                 {getGestureLabel(item.gestureId, item.gesture)} {(item.confidence * 100).toFixed(0)}%
               </Tag>
             ))}

@@ -28,6 +28,60 @@ export function uploadPoliceGestureVideo(file: File) {
   });
 }
 
+export type PoliceGestureStreamEvent =
+  | { event: 'meta'; data: Record<string, unknown> }
+  | { event: 'frame'; data: Record<string, unknown> }
+  | { event: 'done'; data: Record<string, unknown> }
+  | { event: 'error'; data: { message?: string } };
+
+export async function streamPoliceGestureVideo(
+  file: File,
+  onEvent: (event: PoliceGestureStreamEvent) => void,
+  signal?: AbortSignal,
+) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+  const response = await fetch(`${baseURL}/police-gesture/recognize/stream`, {
+    method: 'POST',
+    body: formData,
+    signal,
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`流式识别请求失败: ${response.status}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  const dispatchChunk = (chunk: string) => {
+    const eventName = chunk.match(/^event:\s*(.+)$/m)?.[1]?.trim();
+    const dataText = chunk.match(/^data:\s*(.+)$/m)?.[1]?.trim();
+    if (!eventName || !dataText) return;
+
+    onEvent({
+      event: eventName as PoliceGestureStreamEvent['event'],
+      data: JSON.parse(dataText),
+    } as PoliceGestureStreamEvent);
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const chunks = buffer.split('\n\n');
+    buffer = chunks.pop() || '';
+    chunks.forEach(dispatchChunk);
+  }
+
+  if (buffer.trim()) {
+    dispatchChunk(buffer);
+  }
+}
+
 export function resetPoliceGestureStream(streamId = 'default') {
   const formData = new FormData();
   formData.append('stream_id', streamId);
