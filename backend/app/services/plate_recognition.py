@@ -13,6 +13,7 @@ import numpy as np
 import hyperlpr3 as lpr3
 from ultralytics import YOLO
 from typing import Optional
+from difflib import SequenceMatcher
 from app.utils.logger import logger
 
 # ─── HyperLPR3 plate_type → 车牌颜色 ──────────────────────────
@@ -213,6 +214,141 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
 
     logger.info(f"最终返回 {len(results)} 个车牌识别结果")
     return results
+
+
+# ─── 视频识别 ──────────────────────────────
+VIDEO_EXTRACT_INTERVAL = 30  # 每隔 30 帧取一帧
+
+
+def _plate_core(plate_no: str) -> str:
+    """提取车牌号中的核心字母数字部分（去掉中文前缀，便于模糊匹配）"""
+    core = ""
+    for ch in plate_no:
+        if ch.isascii() and (ch.isalnum() or ch in "-·"):
+            core += ch
+    return core.upper()
+
+
+def _plates_are_same(a: str, b: str, threshold: float = 0.55) -> bool:
+    """判断两个车牌号是否指向同一物理车牌（模糊匹配）"""
+    if a == b:
+        return True
+    # 提取核心字母数字部分
+    core_a = _plate_core(a)
+    core_b = _plate_core(b)
+    if not core_a or not core_b:
+        return False
+    # 核心里有相同的字母数字段（后 5 位稳定部分匹配）
+    suffix_a = core_a[-5:]
+    suffix_b = core_b[-5:]
+    if suffix_a == suffix_b:
+        return True
+    # 编辑距离相似度
+    from difflib import SequenceMatcher
+    ratio = SequenceMatcher(None, core_a, core_b).ratio()
+    return ratio >= threshold
+
+
+def recognize_plates_from_video(video_bytes: bytes) -> list[dict]:
+    """
+    视频车牌识别 pipeline
+
+    策略：
+    1. 写入临时文件，用 OpenCV VideoCapture 逐帧读取
+    2. 约每秒取一帧进行识别
+    3. 模糊去重合并所有帧的车牌结果
+    """
+    import tempfile, os
+
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp.write(video_bytes)
+        tmp_path = tmp.name
+
+    try:
+        cap = cv2.VideoCapture(tmp_path)
+        if not cap.isOpened():
+            logger.error("无法打开视频文件")
+            return []
+
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        if fps <= 0:
+            fps = 30
+        frame_interval = max(1, round(fps))  # ～1 帧/秒
+
+        # 收集所有帧的原始结果
+        raw_results: list[dict] = []
+        frame_idx = 0
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            if frame_idx % frame_interval == 0:
+                timestamp = round(frame_idx / fps, 2)
+                plates = recognize_plates(frame)
+                for p in plates:
+                    p["timestamp"] = timestamp
+                    raw_results.append(p)
+
+            frame_idx += 1
+
+        cap.release()
+
+        # ── 模糊去重 ──
+        # 按置信度降序排列，高置信度优先保留
+        raw_results.sort(key=lambda x: x["confidence"], reverse=True)
+
+        merged = []
+        for p in raw_results:
+            found = False
+            for m in merged:
+                if _plates_are_same(p["plateNo"], m["plateNo"]):
+                    found = True
+                    # 保留最高置信度的车牌号
+                    if p["confidence"] > m["confidence"]:
+                        m["plateNo"] = p["plateNo"]
+                        m["confidence"] = p["confidence"]
+                    # 用更宽泛的 bbox（安全第一）
+                    m["bbox"]["x"] = min(m["bbox"]["x"], p["bbox"]["x"])
+                    m["bbox"]["y"] = min(m["bbox"]["y"], p["bbox"]["y"])
+                    m["bbox"]["width"] = max(
+                        m["bbox"]["x"] + m["bbox"]["width"],
+                        p["bbox"]["x"] + p["bbox"]["width"],
+                    ) - m["bbox"]["x"]
+                    m["bbox"]["height"] = max(
+                        m["bbox"]["y"] + m["bbox"]["height"],
+                        p["bbox"]["y"] + p["bbox"]["height"],
+                    ) - m["bbox"]["y"]
+                    # 更新 timestamp 范围
+                    if "timestampStart" not in m:
+                        m["timestampStart"] = m["timestamp"]
+                    m["timestampStart"] = min(m["timestampStart"], p["timestamp"])
+                    m["timestamp"] = max(m["timestamp"], p["timestamp"])
+                    break
+            if not found:
+                merged.append(p)
+
+        # 重新编号 carId
+        for i, m in enumerate(merged):
+            m["carId"] = i + 1
+            # 如果有时间范围，标记
+            if "timestampStart" in m and m["timestampStart"] != m["timestamp"]:
+                m["timestampRange"] = f'{m["timestampStart"]}s-{m["timestamp"]}s'
+            m.pop("timestampStart", None)
+
+        logger.info(
+            f"视频识别完成: 共处理 {frame_idx} 帧, "
+            f"原始检测 {len(raw_results)} 条, "
+            f"合并去重后 {len(merged)} 个车牌"
+        )
+        return merged
+
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 # ─── CCPD 数据集批量验证工具 ───────────────
