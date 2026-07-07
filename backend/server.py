@@ -12,7 +12,14 @@ import time
 import tempfile
 import logging
 import json
+import shutil
+import subprocess
 from pathlib import Path
+
+LOCAL_PACKAGES_DIR = Path(__file__).parent / ".python-packages"
+if LOCAL_PACKAGES_DIR.exists():
+    import sys
+    sys.path.insert(0, str(LOCAL_PACKAGES_DIR))
 
 def load_env_file():
     env_path = Path(__file__).parent / ".env"
@@ -45,7 +52,8 @@ import numpy as np
 from PIL import Image
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 # ---- 将 ctpgr 加入路径 ----
 CTPGR_DIR = Path(__file__).parent / "ctpgr"
@@ -137,6 +145,10 @@ LSTM_WARMUP_FRAMES = _env_int("CARMATE_LSTM_WARMUP_FRAMES", 15)
 SMOOTH_WINDOW = max(1, _env_int("CARMATE_SMOOTH_WINDOW", 5))
 MIN_SEGMENT_SECONDS = _env_float("CARMATE_MIN_SEGMENT_SECONDS", 0.6)
 LABEL_TIME_OFFSET_SECONDS = max(0.0, _env_float("CARMATE_LABEL_TIME_OFFSET_SECONDS", 0.8))
+PREVIEW_MAX_WIDTH = max(240, _env_int("CARMATE_PREVIEW_MAX_WIDTH", 1280))
+PREVIEW_CRF = min(35, max(18, _env_int("CARMATE_PREVIEW_CRF", 23)))
+PREVIEW_TRANSCODE_TIMEOUT_SECONDS = max(30, _env_int("CARMATE_PREVIEW_TRANSCODE_TIMEOUT_SECONDS", 300))
+VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".webm", ".mkv")
 
 
 def get_torch_device_info() -> dict:
@@ -473,6 +485,80 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+def _ffmpeg_path() -> str | None:
+    ffmpeg_bin = os.getenv("CARMATE_FFMPEG_PATH")
+    if ffmpeg_bin and Path(ffmpeg_bin).is_file():
+        return ffmpeg_bin
+
+    system_ffmpeg = shutil.which("ffmpeg")
+    if system_ffmpeg:
+        return system_ffmpeg
+
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def _remove_files(paths: list[str]):
+    for path in paths:
+        try:
+            if path and Path(path).exists():
+                os.unlink(path)
+        except OSError:
+            logger.warning("临时文件清理失败: %s", path)
+
+
+def _transcode_browser_preview(input_path: str, output_path: str):
+    ffmpeg_bin = _ffmpeg_path()
+    if not ffmpeg_bin:
+        raise HTTPException(
+            503,
+            "后端未找到 FFmpeg。请安装 ffmpeg 或安装 Python 依赖 imageio-ffmpeg 后重启服务。",
+        )
+
+    vf = f"scale='min({PREVIEW_MAX_WIDTH},iw)':-2"
+    command = [
+        ffmpeg_bin,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        input_path,
+        "-vf",
+        vf,
+        "-an",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        str(PREVIEW_CRF),
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=PREVIEW_TRANSCODE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, "预览视频转码超时，请尝试更短的视频")
+
+    if completed.returncode != 0 or not Path(output_path).is_file():
+        detail = completed.stderr.strip() or "FFmpeg 转码失败"
+        raise HTTPException(500, f"预览视频转码失败: {detail}")
+
+
 @app.get("/api/health")
 async def health_check():
     device_info = get_torch_device_info()
@@ -549,6 +635,36 @@ async def recognize_police_gesture_stream_frame(
     }
 
 
+@app.post("/api/police-gesture/preview")
+async def create_police_gesture_preview(file: UploadFile = File(...)):
+    """将上传视频转为浏览器友好的 MP4(H.264/yuv420p)，仅用于前端预览播放。"""
+    contents = await file.read()
+    file_ext = Path(file.filename or "video.mp4").suffix.lower()
+    if file_ext not in VIDEO_EXTENSIONS:
+        raise HTTPException(400, "预览转码仅支持视频文件")
+
+    with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as src_tmp:
+        src_tmp.write(contents)
+        src_path = src_tmp.name
+
+    out_tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+    out_path = out_tmp.name
+    out_tmp.close()
+
+    try:
+        _transcode_browser_preview(src_path, out_path)
+    except Exception:
+        _remove_files([src_path, out_path])
+        raise
+
+    return FileResponse(
+        out_path,
+        media_type="video/mp4",
+        filename=f"{Path(file.filename or 'preview').stem}_preview.mp4",
+        background=BackgroundTask(_remove_files, [src_path, out_path]),
+    )
+
+
 @app.post("/api/police-gesture/recognize")
 async def recognize_police_gesture(file: UploadFile = File(...)):
     """交警手势识别 - 上传图片或视频"""
@@ -557,7 +673,7 @@ async def recognize_police_gesture(file: UploadFile = File(...)):
     timestamp = int(time.time() * 1000)
 
     try:
-        if file_ext in (".mp4", ".avi", ".mov", ".webm", ".mkv"):
+        if file_ext in VIDEO_EXTENSIONS:
             return await _process_video(contents, file_ext, timestamp)
         else:
             return await _process_image(contents, timestamp)
@@ -573,7 +689,7 @@ async def recognize_police_gesture_stream_video(file: UploadFile = File(...)):
     """流式视频识别: 边分析边返回采样帧结果，最后返回平滑后的完整时间线。"""
     contents = await file.read()
     file_ext = Path(file.filename or "video.mp4").suffix.lower()
-    if file_ext not in (".mp4", ".avi", ".mov", ".webm", ".mkv"):
+    if file_ext not in VIDEO_EXTENSIONS:
         raise HTTPException(400, "流式识别仅支持视频文件")
 
     timestamp = int(time.time() * 1000)

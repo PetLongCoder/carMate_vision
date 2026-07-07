@@ -82,6 +82,25 @@ export async function streamPoliceGestureVideo(
   }
 }
 
+export async function createPoliceGesturePreview(file: File, signal?: AbortSignal) {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
+  const response = await fetch(`${baseURL}/police-gesture/preview`, {
+    method: 'POST',
+    body: formData,
+    signal,
+  });
+
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(text || `预览视频生成失败: ${response.status}`);
+  }
+
+  return response.blob();
+}
+
 export function resetPoliceGestureStream(streamId = 'default') {
   const formData = new FormData();
   formData.append('stream_id', streamId);

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Descriptions,
@@ -19,6 +20,7 @@ import {
 import { PageHeader } from '../components/common';
 import type { PoliceGestureResult } from '../types';
 import {
+  createPoliceGesturePreview,
   recognizePoliceGestureFrame,
   resetPoliceGestureStream,
   streamPoliceGestureVideo,
@@ -63,8 +65,22 @@ type Segment = {
   gestureId: number;
 };
 
+type SegmentSummary = {
+  gesture: string;
+  gestureId: number;
+  count: number;
+  duration: number;
+  firstStart: number;
+};
+
 type StreamRecord = PoliceGestureResult & {
   inference_ms?: number;
+};
+
+type PendingUpload = {
+  file: File;
+  uploadSeq: number;
+  abortController: AbortController;
 };
 
 const STREAM_ID = 'web-camera-police-gesture';
@@ -79,11 +95,15 @@ const getGestureColor = (gestureId?: number) => (
   gestureId === undefined ? '#8c8c8c' : GESTURE_COLORS[gestureId] || '#8c8c8c'
 );
 
+const formatSeconds = (seconds: number) => `${seconds.toFixed(1)}s`;
+
 const PoliceGesture: React.FC = () => {
   const [result, setResult] = useState<PoliceGestureResult | null>(null);
   const [top5, setTop5] = useState<Array<{ gesture: string; gestureId: number; confidence: number }>>([]);
   const [videoSrc, setVideoSrc] = useState<string | null>(null);
   const [videoFileName, setVideoFileName] = useState('');
+  const [videoError, setVideoError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
   const [inferenceMs, setInferenceMs] = useState<number>(0);
@@ -105,6 +125,36 @@ const PoliceGesture: React.FC = () => {
   const timerRef = useRef<number | undefined>(undefined);
   const uploadSeqRef = useRef(0);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const previewAbortRef = useRef<AbortController | null>(null);
+  const videoUrlRef = useRef<string | null>(null);
+  const pendingUploadRef = useRef<PendingUpload | null>(null);
+  const analysisStartedRef = useRef(false);
+  const analysisStartTimerRef = useRef<number | undefined>(undefined);
+
+  const segmentSummaries = useMemo<SegmentSummary[]>(() => {
+    const summaries = new Map<number, SegmentSummary>();
+
+    segments.forEach((seg) => {
+      const durationSeconds = Math.max(seg.end - seg.start, 0);
+      const current = summaries.get(seg.gestureId);
+
+      if (current) {
+        current.count += 1;
+        current.duration += durationSeconds;
+        current.firstStart = Math.min(current.firstStart, seg.start);
+      } else {
+        summaries.set(seg.gestureId, {
+          gesture: seg.gesture,
+          gestureId: seg.gestureId,
+          count: 1,
+          duration: durationSeconds,
+          firstStart: seg.start,
+        });
+      }
+    });
+
+    return Array.from(summaries.values()).sort((a, b) => b.duration - a.duration);
+  }, [segments]);
 
   const currentSegment = useMemo(() => (
     segments.find((seg) => playbackTime >= seg.start && playbackTime <= seg.end)
@@ -133,34 +183,15 @@ const PoliceGesture: React.FC = () => {
       ? '正在分析'
       : '等待标注';
   const overlayColor = getGestureColor(overlayGestureId);
+  const currentConfidence = currentFrame?.confidence;
+  const primarySummary = segmentSummaries[0];
 
-  const handleUpload = async (file: File) => {
-    const uploadSeq = uploadSeqRef.current + 1;
-    uploadSeqRef.current = uploadSeq;
-    uploadAbortRef.current?.abort();
-    const abortController = new AbortController();
-    uploadAbortRef.current = abortController;
+  const startStreamAnalysis = useCallback(async (pending: PendingUpload) => {
+    const { file, uploadSeq, abortController } = pending;
+    if (analysisStartedRef.current || uploadSeqRef.current !== uploadSeq) return;
 
-    setLoading(true);
-    setProgress(0);
-    setResult(null);
-    setTop5([]);
-    setFrames([]);
-    setSegments([]);
-    setInferenceMs(0);
-    setDuration(0);
-    setFps(0);
-    setSampleFps(0);
-    setPlaybackTime(0);
-    setVideoFileName(file.name);
-
-    if (videoSrc) {
-      URL.revokeObjectURL(videoSrc);
-    }
-
-    const objectUrl = URL.createObjectURL(file);
-    setVideoSrc(objectUrl);
-    message.success('视频已载入，后端开始边分析边返回结果');
+    analysisStartedRef.current = true;
+    message.success('后端开始边分析边返回结果');
 
     try {
       await streamPoliceGestureVideo(
@@ -217,8 +248,8 @@ const PoliceGesture: React.FC = () => {
         abortController.signal,
       );
     } catch (error) {
-      if (abortController.signal.aborted) return false;
-      if (uploadSeqRef.current !== uploadSeq) return false;
+      if (abortController.signal.aborted) return;
+      if (uploadSeqRef.current !== uploadSeq) return;
       setProgress(0);
       console.error('police gesture upload failed:', error);
       message.error('识别失败，请确认后端服务已启动');
@@ -227,6 +258,84 @@ const PoliceGesture: React.FC = () => {
         setLoading(false);
       }
     }
+  }, []);
+
+  const startPendingAnalysis = useCallback(() => {
+    if (!pendingUploadRef.current) return;
+    void startStreamAnalysis(pendingUploadRef.current);
+  }, [startStreamAnalysis]);
+
+  const replaceVideoSource = useCallback((url: string) => {
+    if (videoUrlRef.current) {
+      URL.revokeObjectURL(videoUrlRef.current);
+    }
+    videoUrlRef.current = url;
+    setVideoSrc(url);
+    setPlaybackTime(0);
+  }, []);
+
+  const createPreviewVideo = useCallback(async (file: File, uploadSeq: number) => {
+    const abortController = new AbortController();
+    previewAbortRef.current = abortController;
+    setPreviewLoading(true);
+
+    try {
+      const previewBlob = await createPoliceGesturePreview(file, abortController.signal);
+      if (uploadSeqRef.current !== uploadSeq || abortController.signal.aborted) return;
+      replaceVideoSource(URL.createObjectURL(previewBlob));
+      setVideoError('');
+      message.success('已生成浏览器兼容预览视频');
+    } catch (error) {
+      if (abortController.signal.aborted || uploadSeqRef.current !== uploadSeq) return;
+      console.warn('preview transcode failed:', error);
+      setVideoError('预览转码不可用，已尝试播放原视频；如果仍无法播放，请确认后端已安装 imageio-ffmpeg 或系统 FFmpeg。');
+    } finally {
+      if (uploadSeqRef.current === uploadSeq) {
+        setPreviewLoading(false);
+      }
+    }
+  }, [replaceVideoSource]);
+
+  const handleUpload = (file: File) => {
+    const uploadSeq = uploadSeqRef.current + 1;
+    uploadSeqRef.current = uploadSeq;
+    uploadAbortRef.current?.abort();
+    previewAbortRef.current?.abort();
+    if (analysisStartTimerRef.current) {
+      window.clearTimeout(analysisStartTimerRef.current);
+      analysisStartTimerRef.current = undefined;
+    }
+
+    const abortController = new AbortController();
+    uploadAbortRef.current = abortController;
+    pendingUploadRef.current = { file, uploadSeq, abortController };
+    analysisStartedRef.current = false;
+
+    setLoading(true);
+    setProgress(0);
+    setResult(null);
+    setTop5([]);
+    setFrames([]);
+    setSegments([]);
+    setInferenceMs(0);
+    setDuration(0);
+    setFps(0);
+    setSampleFps(0);
+    setPlaybackTime(0);
+    setVideoFileName(file.name);
+    setVideoError('');
+    setPreviewLoading(false);
+
+    const objectUrl = URL.createObjectURL(file);
+    replaceVideoSource(objectUrl);
+    message.success('视频已载入，正在生成兼容预览并进行流式分析');
+
+    void createPreviewVideo(file, uploadSeq);
+
+    analysisStartTimerRef.current = window.setTimeout(() => {
+      analysisStartTimerRef.current = undefined;
+      startPendingAnalysis();
+    }, 1200);
 
     return false;
   };
@@ -315,16 +424,13 @@ const PoliceGesture: React.FC = () => {
 
   useEffect(() => {
     return () => {
-      if (videoSrc) URL.revokeObjectURL(videoSrc);
-    };
-  }, [videoSrc]);
-
-  useEffect(() => {
-    return () => {
       uploadSeqRef.current += 1;
       uploadAbortRef.current?.abort();
+      previewAbortRef.current?.abort();
+      if (analysisStartTimerRef.current) window.clearTimeout(analysisStartTimerRef.current);
       if (timerRef.current) window.clearInterval(timerRef.current);
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
     };
   }, []);
 
@@ -354,19 +460,31 @@ const PoliceGesture: React.FC = () => {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1.3fr) minmax(320px, 0.7fr)', gap: 16 }}>
         <Card
           title="上传视频预览"
-          extra={videoSrc && <Tag color={loading ? 'processing' : segments.length ? 'green' : 'default'}>{loading ? '分析中' : segments.length ? `${segments.length} 段动作` : '待分析'}</Tag>}
+          extra={videoSrc && <Tag color={previewLoading ? 'processing' : loading ? 'processing' : segments.length ? 'green' : 'default'}>{previewLoading ? '生成预览' : loading ? '分析中' : segments.length ? `${segments.length} 段动作` : '待分析'}</Tag>}
         >
           {videoSrc ? (
             <div style={{ position: 'relative', background: '#000', borderRadius: 8, overflow: 'hidden' }}>
               <video
+                key={videoSrc}
                 ref={videoRef}
                 src={videoSrc}
                 controls
                 muted
                 playsInline
+                preload="auto"
                 onLoadedMetadata={(event) => {
                   setDuration(event.currentTarget.duration || duration);
                   void event.currentTarget.play().catch(() => undefined);
+                  startPendingAnalysis();
+                }}
+                onCanPlay={(event) => {
+                  setVideoError('');
+                  void event.currentTarget.play().catch(() => undefined);
+                  startPendingAnalysis();
+                }}
+                onError={() => {
+                  setVideoError('当前视频可以继续后端分析，但浏览器无法播放这个视频编码。建议转为 H.264 编码的 MP4 后再上传预览。');
+                  startPendingAnalysis();
                 }}
                 onTimeUpdate={(event) => setPlaybackTime(event.currentTarget.currentTime)}
                 style={{ width: '100%', maxHeight: 430, display: 'block', background: '#000' }}
@@ -406,6 +524,14 @@ const PoliceGesture: React.FC = () => {
           ) : (
             <Empty description="选择视频后会立即播放预览，识别完成后按时间标注动作" />
           )}
+          {videoError && (
+            <Alert
+              type="warning"
+              showIcon
+              message={videoError}
+              style={{ marginTop: 12 }}
+            />
+          )}
           <div style={{ marginTop: 16, textAlign: 'center' }}>
             <Upload accept="video/*" showUploadList={false} beforeUpload={handleUpload} disabled={loading}>
               <Button icon={<UploadOutlined />} size="large" loading={loading}>
@@ -417,38 +543,123 @@ const PoliceGesture: React.FC = () => {
           {loading && (
             <div style={{ margin: '18px auto 0', maxWidth: 420 }}>
               <Progress percent={progress} status="active" strokeColor="#1677ff" />
-              <span style={{ color: '#8c8c8c' }}>正在连续提取关键点并进行 LSTM 时序分类，视频可先播放预览</span>
+              <span style={{ color: '#8c8c8c' }}>
+                {previewLoading ? '正在生成浏览器兼容 MP4 预览，同时进行 LSTM 时序分析' : '正在连续提取关键点并进行 LSTM 时序分类，视频可先播放预览'}
+              </span>
             </div>
           )}
         </Card>
 
-        <Card title="视频识别结果">
-          {result ? (
-            <div style={{ textAlign: 'center' }}>
-              <Tag color={getGestureColor(result.gestureId)} style={{ fontSize: 22, padding: '6px 20px', marginBottom: 12 }}>
-                {getGestureLabel(result.gestureId, result.gesture)}
-              </Tag>
-              <Progress
-                type="circle"
-                percent={Math.round(result.confidence * 100)}
-                size={88}
-                strokeColor={getGestureColor(result.gestureId)}
-              />
-              <Descriptions size="small" column={1} style={{ marginTop: 12, textAlign: 'left' }}>
-                <Descriptions.Item label="推理耗时">{inferenceMs.toFixed(0)} ms</Descriptions.Item>
-                <Descriptions.Item label="分析帧数">{frames.length} 帧</Descriptions.Item>
+        <Card
+          title="视频识别结果"
+          extra={segments.length > 0 && <Tag color="blue">{segments.length} 段</Tag>}
+        >
+          {result || frames.length > 0 || segments.length > 0 ? (
+            <div>
+              <div
+                style={{
+                  border: `1px solid ${overlayColor}`,
+                  borderRadius: 8,
+                  padding: 12,
+                  background: `${overlayColor}12`,
+                  marginBottom: 12,
+                }}
+              >
+                <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 6 }}>
+                  当前播放位置
+                </div>
+                <Space align="center" wrap>
+                  <Tag color={overlayColor} style={{ fontSize: 16, padding: '4px 12px' }}>
+                    {overlayLabel}
+                  </Tag>
+                  <span style={{ color: '#595959' }}>
+                    {formatSeconds(playbackTime)}
+                    {currentSegment ? ` / ${formatSeconds(currentSegment.start)} - ${formatSeconds(currentSegment.end)}` : ''}
+                  </span>
+                  {currentConfidence !== undefined && (
+                    <span style={{ color: '#8c8c8c' }}>
+                      置信度 {(currentConfidence * 100).toFixed(0)}%
+                    </span>
+                  )}
+                </Space>
+              </div>
+
+              <Descriptions size="small" column={1} style={{ marginBottom: 12 }}>
+                <Descriptions.Item label="识别到的动作段">{segments.length || '-'}</Descriptions.Item>
+                <Descriptions.Item label="主要动作">
+                  {primarySummary ? (
+                    <Tag color={getGestureColor(primarySummary.gestureId)}>
+                      {getGestureLabel(primarySummary.gestureId, primarySummary.gesture)}
+                      {' '}
+                      {formatSeconds(primarySummary.duration)}
+                    </Tag>
+                  ) : (
+                    '-'
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="推理耗时">{inferenceMs ? `${inferenceMs.toFixed(0)} ms` : '-'}</Descriptions.Item>
+                <Descriptions.Item label="分析帧数">{frames.length ? `${frames.length} 帧` : '-'}</Descriptions.Item>
                 <Descriptions.Item label="视频帧率">{fps || '-'} fps</Descriptions.Item>
                 <Descriptions.Item label="采样帧率">{sampleFps || '-'} fps</Descriptions.Item>
               </Descriptions>
-              {top5.length > 0 && (
-                <Space wrap style={{ marginTop: 8, justifyContent: 'center' }}>
-                  {top5.map((item) => (
-                    <Tag key={item.gestureId} color={getGestureColor(item.gestureId)}>
-                      {getGestureLabel(item.gestureId, item.gesture)} {(item.confidence * 100).toFixed(0)}%
-                    </Tag>
-                  ))}
-                </Space>
-              )}
+
+              {segmentSummaries.length > 0 ? (
+                <div>
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                    动作分布
+                  </div>
+                  <Space direction="vertical" style={{ width: '100%' }} size={8}>
+                    {segmentSummaries.map((item) => {
+                      const percent = duration ? Math.round((item.duration / duration) * 100) : 0;
+                      return (
+                        <button
+                          key={item.gestureId}
+                          type="button"
+                          onClick={() => seekTo(item.firstStart)}
+                          style={{
+                            width: '100%',
+                            border: '1px solid #f0f0f0',
+                            borderRadius: 8,
+                            background: '#fff',
+                            padding: '8px 10px',
+                            cursor: 'pointer',
+                            textAlign: 'left',
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                            <span>
+                              <Tag color={getGestureColor(item.gestureId)} style={{ marginInlineEnd: 8 }}>
+                                {getGestureLabel(item.gestureId, item.gesture)}
+                              </Tag>
+                              <span style={{ color: '#8c8c8c' }}>{item.count} 段</span>
+                            </span>
+                            <span style={{ color: '#595959' }}>{formatSeconds(item.duration)}</span>
+                          </div>
+                          <Progress
+                            percent={percent}
+                            size="small"
+                            showInfo={false}
+                            strokeColor={getGestureColor(item.gestureId)}
+                          />
+                        </button>
+                      );
+                    })}
+                  </Space>
+                </div>
+              ) : top5.length > 0 ? (
+                <div>
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
+                    全片候选结果
+                  </div>
+                  <Space wrap>
+                    {top5.map((item) => (
+                      <Tag key={item.gestureId} color={getGestureColor(item.gestureId)}>
+                        {getGestureLabel(item.gestureId, item.gesture)} {(item.confidence * 100).toFixed(0)}%
+                      </Tag>
+                    ))}
+                  </Space>
+                </div>
+              ) : null}
             </div>
           ) : (
             <Empty description={loading ? '等待后端返回时序识别结果' : '上传视频后显示识别结果'} />

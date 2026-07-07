@@ -26,6 +26,8 @@ backend/frames/
 backend/runs/
 backend/test_gesture.mp4
 backend/*.log
+backend/.python-packages/
+.pip-cache/
 
 # Local environment files
 .env

@@ -136,6 +136,17 @@ Content-Type: multipart/form-data
 | frames | 每个采样帧的识别结果 |
 | segments | 连续手势时间段 |
 
+### 4.3 浏览器兼容预览视频
+
+```http
+POST /api/police-gesture/preview
+Content-Type: multipart/form-data
+```
+
+该接口只用于前端预览播放：后端使用 FFmpeg 将上传视频转为浏览器更兼容的 `MP4 + H.264 + yuv420p`，识别分析仍然使用原始上传视频，避免转码影响模型输入。
+
+如果系统没有安装 `ffmpeg`，后端会尝试使用 Python 依赖 `imageio-ffmpeg` 提供的内置 FFmpeg。
+
 ## 5. 今日完成内容
 
 ### 5.1 接入并验证 ctpgr-pytorch 模型
@@ -335,6 +346,22 @@ CARMATE_LABEL_TIME_OFFSET_SECONDS=0.8
 ```
 
 这个值会把视频标注时间整体向前移动，减少“动作快结束才出现标签”的体感延迟。如果标签仍然偏晚，可以尝试调到 `1.0` 或 `1.2`；如果标签出现太早，可以调回 `0.5`。
+
+### 7.7 为什么有些视频后端能分析但浏览器不能播放？
+
+后端 OpenCV/FFmpeg 能读取的视频格式比浏览器 `<video>` 支持范围更宽。浏览器最稳的是 `MP4 + H.264 + yuv420p`。项目已增加自动预览转码接口：
+
+```env
+CARMATE_PREVIEW_MAX_WIDTH=1280
+CARMATE_PREVIEW_CRF=23
+CARMATE_PREVIEW_TRANSCODE_TIMEOUT_SECONDS=300
+```
+
+前端上传视频后会自动请求浏览器兼容预览版；如果本机没有系统 FFmpeg，请先安装依赖：
+
+```powershell
+pip install -r backend/requirements.txt
+```
 
 ## 8. 后续优化方向
 
