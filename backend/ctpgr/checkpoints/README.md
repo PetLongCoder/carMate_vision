@@ -1,15 +1,15 @@
-# CTPGR 模型权重放置说明
+# CTPGR 模型权重
 
-交警手势识别后端启动时需要以下两个模型权重文件：
+交警手势识别后端启动时会加载下面两个预训练权重：
 
 ```text
 backend/ctpgr/checkpoints/pose_model.pt
 backend/ctpgr/checkpoints/lstm.pt
 ```
 
-这两个文件体积较大，不提交到 GitHub。其他成员 clone 项目后，需要手动从项目负责人或共享网盘获取这两个文件，并放到当前目录。
+这两个文件已经随仓库提交。其他成员 clone 项目后，不需要再去云盘单独下载模型文件。
 
-放置完成后的目录结构应为：
+目录结构应为：
 
 ```text
 backend/ctpgr/checkpoints/
@@ -18,5 +18,4 @@ backend/ctpgr/checkpoints/
 └── lstm.pt
 ```
 
-缺少权重文件时，后端会在启动模型预加载阶段失败，交警手势识别功能无法使用。
-
+如果后端启动时报缺少模型文件，请先确认当前目录下这两个 `.pt` 文件是否存在。

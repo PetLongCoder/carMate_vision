@@ -14,6 +14,8 @@ backend/ctpgr/checkpoints/
 !backend/ctpgr/checkpoints/
 backend/ctpgr/checkpoints/*
 !backend/ctpgr/checkpoints/README.md
+!backend/ctpgr/checkpoints/pose_model.pt
+!backend/ctpgr/checkpoints/lstm.pt
 backend/ctpgr/generated/
 backend/ctpgr/.git.backup/
 backend/ctpgr/__pycache__/
