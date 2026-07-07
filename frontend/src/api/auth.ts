@@ -11,6 +11,7 @@ import type {
   EmailLoginRequest,
   SendSmsCodeRequest,
   SendEmailCodeRequest,
+  VerifySmsCodeRequest,
 } from '../types';
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_AUTH !== 'false';
@@ -258,6 +259,16 @@ export async function sendSmsCode(data: SendSmsCodeRequest): Promise<void> {
   }
 
   await request.post<ApiResponse<null>>('/auth/sms/send', data);
+}
+
+export async function verifySmsCode(data: VerifySmsCodeRequest): Promise<void> {
+  if (USE_MOCK) {
+    await new Promise((r) => setTimeout(r, 400));
+    verifyMockCode(`phone:${data.phone}`, data.code);
+    return;
+  }
+
+  await request.post<ApiResponse<null>>('/auth/sms/verify', data);
 }
 
 export async function sendEmailCode(data: SendEmailCodeRequest): Promise<void> {

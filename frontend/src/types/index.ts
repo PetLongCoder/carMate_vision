@@ -111,6 +111,11 @@ export interface SendEmailCodeRequest {
   scene: CodeScene;
 }
 
+export interface VerifySmsCodeRequest {
+  phone: string;
+  code: string;
+}
+
 export interface RegisterRequest {
   username: string;
   password: string;

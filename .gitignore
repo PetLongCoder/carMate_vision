@@ -21,3 +21,8 @@ backend/frames/
 backend/runs/
 backend/test_gesture.mp4
 backend/*.log
+
+# 本地环境配置
+.env
+backend/.env
+frontend/.env

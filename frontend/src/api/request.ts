@@ -1,5 +1,8 @@
 import axios from 'axios';
 import type { ApiResponse } from '../types';
+import { AuthError, type AuthErrorCode } from '../utils/authError';
+
+type ApiErrorBody = ApiResponse<unknown> & { authErrorCode?: AuthErrorCode };
 
 const request = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api',
@@ -22,8 +25,11 @@ request.interceptors.request.use(
 
 request.interceptors.response.use(
   (response) => {
-    const res = response.data as ApiResponse<unknown>;
+    const res = response.data as ApiErrorBody;
     if (res.code !== 200 && res.code !== 0) {
+      if (res.authErrorCode) {
+        return Promise.reject(new AuthError(res.message, res.authErrorCode));
+      }
       console.error(`[API Error] ${res.message}`);
       return Promise.reject(new Error(res.message || '请求失败'));
     }
@@ -34,6 +40,13 @@ request.interceptors.response.use(
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       window.location.href = '/login';
+    }
+    const detail = error.response?.data?.detail;
+    if (error.response?.status === 422 && Array.isArray(detail)) {
+      const msg = detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join('；');
+      if (msg) {
+        return Promise.reject(new Error(msg));
+      }
     }
     return Promise.reject(error);
   },

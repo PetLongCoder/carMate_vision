@@ -83,7 +83,9 @@ const Login: React.FC = () => {
       await sendSmsCode({ phone, scene: 'login' });
       message.success(
         import.meta.env.DEV
-          ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
+            ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+            : '验证码已发送（请在后端终端查看验证码）'
           : '验证码已发送',
       );
     } catch (err) {
@@ -98,7 +100,9 @@ const Login: React.FC = () => {
       await sendEmailCode({ email, scene: 'login' });
       message.success(
         import.meta.env.DEV
-          ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
+            ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+            : '验证码已发送（请在后端终端查看验证码）'
           : '验证码已发送',
       );
     } catch (err) {

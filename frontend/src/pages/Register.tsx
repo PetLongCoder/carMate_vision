@@ -9,7 +9,7 @@ import {
   ArrowLeftOutlined,
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
-import { register, sendSmsCode } from '../api/auth';
+import { register, sendSmsCode, verifySmsCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
 import { emailFormRules } from '../utils/validation';
@@ -23,6 +23,8 @@ const STEP_ACCOUNT = 1;
 const Register: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [currentStep, setCurrentStep] = useState(STEP_PHONE);
+  const [verifiedPhone, setVerifiedPhone] = useState('');
+  const [verifiedCode, setVerifiedCode] = useState('');
   const [form] = Form.useForm();
   const navigate = useNavigate();
   const setAuth = useAuthStore((s) => s.setAuth);
@@ -34,7 +36,9 @@ const Register: React.FC = () => {
       await sendSmsCode({ phone, scene: 'register' });
       message.success(
         import.meta.env.DEV
-          ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
+            ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+            : '验证码已发送（请在后端终端查看验证码）'
           : '验证码已发送',
       );
     } catch (err) {
@@ -44,10 +48,15 @@ const Register: React.FC = () => {
 
   const handleNext = async () => {
     try {
+      const phone = form.getFieldValue('phone');
+      const code = form.getFieldValue('code');
       await form.validateFields(['phone', 'code']);
+      await verifySmsCode({ phone, code });
+      setVerifiedPhone(phone);
+      setVerifiedCode(code);
       setCurrentStep(STEP_ACCOUNT);
-    } catch {
-      message.warning('请先完成手机号验证');
+    } catch (err) {
+      notifyAuthError(err, navigate);
     }
   };
 
@@ -57,15 +66,21 @@ const Register: React.FC = () => {
 
   const handleSubmit = async () => {
     try {
-      const values = await form.validateFields();
+      const values = await form.validateFields(['username', 'password', 'confirmPassword', 'email']);
+      if (!verifiedPhone || !verifiedCode) {
+        message.warning('请先完成手机号验证');
+        setCurrentStep(STEP_PHONE);
+        return;
+      }
+
       setLoading(true);
 
       const result = await register({
         username: values.username,
-        phone: values.phone,
-        code: values.code,
+        phone: verifiedPhone,
+        code: verifiedCode,
         password: values.password,
-        email: values.email,
+        email: values.email?.trim() || undefined,
       });
 
       setAuth(result.token, result.user);
