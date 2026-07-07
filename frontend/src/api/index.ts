@@ -7,9 +7,15 @@ import type {
   Alert,
   HistoryRecord,
   DashboardStats,
+  TrackSessionResponse,
+  StreamStartResponse,
+  TrackingSessionInfo,
 } from '../types';
 
-// ---- 车牌识别 ----
+// ═══════════════════════════════════════════════════════════
+//  车牌识别
+// ═══════════════════════════════════════════════════════════
+
 export function uploadPlateImage(file: File) {
   const formData = new FormData();
   formData.append('file', file);
@@ -18,7 +24,50 @@ export function uploadPlateImage(file: File) {
   });
 }
 
-// ---- 交警手势识别 ----
+// ═══════════════════════════════════════════════════════════
+//  实时追踪
+// ═══════════════════════════════════════════════════════════
+
+/** 上传视频并创建追踪会话 */
+export function uploadTrackVideo(file: File) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request.post<ApiResponse<TrackSessionResponse>>('/plate/track', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30000,
+  });
+}
+
+/** 启动流媒体追踪会话 */
+export function startStreamTracking(url: string, name?: string) {
+  const formData = new FormData();
+  formData.append('url', url);
+  if (name) formData.append('name', name);
+  return request.post<ApiResponse<StreamStartResponse>>('/plate/stream/start', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 10000,
+  });
+}
+
+/** 停止追踪会话 */
+export function stopStreamTracking(sessionId: string) {
+  return request.post<ApiResponse<null>>(`/plate/stream/stop/${sessionId}`);
+}
+
+/** 列出所有追踪会话 */
+export function listTrackingSessions() {
+  return request.get<ApiResponse<TrackingSessionInfo[]>>('/plate/stream/sessions');
+}
+
+/** 查询会话详情 */
+export function getTrackingSession(sessionId: string) {
+  return request.get<ApiResponse<TrackingSessionInfo>>(`/plate/stream/sessions/${sessionId}`);
+}
+
+// ═══════════════════════════════════════════════════════════
+//  交警手势识别
+// ═══════════════════════════════════════════════════════════
+
 export function uploadPoliceGestureVideo(file: File) {
   const formData = new FormData();
   formData.append('file', file);
@@ -27,6 +76,10 @@ export function uploadPoliceGestureVideo(file: File) {
     timeout: 600000,
   });
 }
+
+// ═══════════════════════════════════════════════════════════
+//  交警手势识别 - SSE 流式识别
+// ═══════════════════════════════════════════════════════════
 
 export type PoliceGestureStreamEvent =
   | { event: 'meta'; data: Record<string, unknown> }
@@ -100,7 +153,9 @@ export function recognizePoliceGestureFrame(file: Blob, streamId = 'default') {
   });
 }
 
-// ---- 车主手势识别 ----
+// ═══════════════════════════════════════════════════════════
+//  车主手势识别
+// ═══════════════════════════════════════════════════════════
 export function uploadDriverGestureImage(file: File) {
   const formData = new FormData();
   formData.append('file', file);
@@ -109,7 +164,10 @@ export function uploadDriverGestureImage(file: File) {
   });
 }
 
-// ---- 告警 ----
+// ═══════════════════════════════════════════════════════════
+//  告警
+// ═══════════════════════════════════════════════════════════
+
 export function getAlerts(params?: { page?: number; pageSize?: number; level?: string }) {
   return request.get<ApiResponse<{ list: Alert[]; total: number }>>('/alerts', { params });
 }
@@ -118,12 +176,18 @@ export function acknowledgeAlert(id: number) {
   return request.put<ApiResponse<null>>(`/alerts/${id}/acknowledge`);
 }
 
-// ---- 历史记录 ----
+// ═══════════════════════════════════════════════════════════
+//  历史记录
+// ═══════════════════════════════════════════════════════════
+
 export function getHistory(params?: { page?: number; pageSize?: number; type?: string }) {
   return request.get<ApiResponse<{ list: HistoryRecord[]; total: number }>>('/history', { params });
 }
 
-// ---- 统计数据 ----
+// ═══════════════════════════════════════════════════════════
+//  统计数据
+// ═══════════════════════════════════════════════════════════
+
 export function getDashboardStats() {
   return request.get<ApiResponse<DashboardStats>>('/stats/dashboard');
 }
