@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import (
     auth,
@@ -46,10 +47,16 @@ async def root():
 
 @app.on_event("startup")
 async def startup_event():
-    init_db()
-    db = SessionLocal()
-    try:
-        seed_default_users(db)
-    finally:
-        db.close()
     logger.info("🚀 CarMate 服务启动成功，访问 http://127.0.0.1:8000/docs")
+    
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    print("✅ WebSocket 客户端已连接")
+    try:
+        while True:
+            # 保持连接活跃，接收客户端消息（可选）
+            data = await websocket.receive_text()
+            print(f"收到: {data}")
+    except WebSocketDisconnect:
+        print("❌ WebSocket 客户端断开连接")

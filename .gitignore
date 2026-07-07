@@ -1,6 +1,9 @@
 node_modules
+
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 *.pt
 *.task
 *.onnx
