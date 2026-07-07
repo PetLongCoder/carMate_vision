@@ -57,21 +57,26 @@ async def run_video_session(session: TrackingSession):
             timestamp = frame_idx / fps if fps > 0 else 0
             session.processed_frames += 1
 
-            if results:
-                all_results.append({
-                    "frameNumber": frame_idx,
-                    "timestamp": round(timestamp, 3),
-                    "detections": results,
-                })
-                await session.broadcast({
-                    "type": "detection",
-                    "sessionId": session.session_id,
-                    "frameNumber": frame_idx,
-                    "timestamp": round(timestamp, 3),
-                    "fps": fps,
-                    "detections": results,
-                    "processingMs": round((time.time() - start_time) * 1000, 1),
-                })
+            # 流模式: 保存标注帧给 MJPEG 流
+            if session.type == SessionType.STREAM and annotated is not None:
+                _, jpeg = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                await session.set_frame(jpeg.tobytes())
+
+            # 始终推送检测结果 (含空结果), 让前端感知流存活
+            all_results.append({
+                "frameNumber": frame_idx,
+                "timestamp": round(timestamp, 3),
+                "detections": results if results else [],
+            })
+            await session.broadcast({
+                "type": "detection",
+                "sessionId": session.session_id,
+                "frameNumber": frame_idx,
+                "timestamp": round(timestamp, 3),
+                "fps": fps,
+                "detections": results if results else [],
+                "processingMs": round((time.time() - start_time) * 1000, 1),
+            })
 
             # 定期推送进度
             if frame_idx % 15 == 0:

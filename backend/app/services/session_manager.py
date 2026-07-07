@@ -56,9 +56,19 @@ class TrackingSession:
         # 可选的处理器引用 (由后台任务设置, 用于获取追踪汇总)
         self.processor: Optional[object] = None  # VideoStreamProcessor
 
+        # 最新标注帧 (JPEG bytes) — 用于 MJPEG 流推送
+        self.latest_frame: Optional[bytes] = None
+        self._frame_cond = asyncio.Condition()
+
         # WebSocket 连接池 (同一会话可多终端订阅)
         self._ws_connections: list[asyncio.Queue] = []
         self._lock = asyncio.Lock()
+
+    async def set_frame(self, jpeg_bytes: bytes):
+        """更新最新帧并通知等待者 (MJPEG 流用)"""
+        async with self._frame_cond:
+            self.latest_frame = jpeg_bytes
+            self._frame_cond.notify_all()
 
     # ── 连接管理 ────────────────────────────────────
 

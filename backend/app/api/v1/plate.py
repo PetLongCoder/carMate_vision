@@ -18,6 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi.responses import StreamingResponse
 
 from app.services.plate_recognition import (
     recognize_plates,
@@ -245,3 +246,40 @@ async def get_stream_session(session_id: str):
         "message": "success",
         "data": session.to_dict(),
     }
+
+
+@router.get("/plate/stream/{session_id}/mjpeg")
+async def stream_mjpeg(session_id: str):
+    """
+    MJPEG 流端点 (GET /api/plate/stream/{session_id}/mjpeg)
+
+    返回 multipart/x-mixed-replace 格式的连续 JPEG 帧,
+    前端可直接用 <img> 标签播放。
+    """
+    session = await session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
+
+    async def frame_generator():
+        boundary = b"--frame\r\n"
+        while True:
+            async with session._frame_cond:
+                await session._frame_cond.wait()
+                if session.latest_frame is not None:
+                    yield boundary
+                    yield b"Content-Type: image/jpeg\r\n"
+                    yield f"Content-Length: {len(session.latest_frame)}\r\n".encode()
+                    yield b"\r\n"
+                    yield session.latest_frame
+                    yield b"\r\n"
+
+            # 会话结束则停止
+            if session.status in (SessionStatus.COMPLETED,
+                                  SessionStatus.ERROR,
+                                  SessionStatus.STOPPED):
+                break
+
+    return StreamingResponse(
+        frame_generator(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )

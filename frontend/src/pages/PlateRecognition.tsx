@@ -72,6 +72,7 @@ function drawDetectionsOnCanvas(
   canvas: HTMLCanvasElement,
   video: HTMLVideoElement,
   detections: TrackedPlateResult[],
+  lagSeconds: number = 0,
 ) {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
@@ -126,6 +127,54 @@ function drawDetectionsOnCanvas(
     ctx.fillStyle = color;
     ctx.fillText(info, x, infoY);
   }
+
+  // 滞后指示器: 处理速度 < 播放速度时在右上角提示
+  if (lagSeconds > 0.5) {
+    const text = `⏳ 检测追赶中 +${lagSeconds.toFixed(1)}s`;
+    ctx.font = 'bold 14px -apple-system, sans-serif';
+    const tw = ctx.measureText(text).width;
+    const padding = 14;
+    const bannerX = rect.width - tw - padding * 2 - 12;
+    const bannerY = 14;
+    const bannerH = 38;
+
+    ctx.fillStyle = 'rgba(250, 173, 20, 0.92)';
+    ctx.beginPath();
+    ctx.roundRect(bannerX, bannerY, tw + padding * 2, bannerH, 8);
+    ctx.fill();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 14px -apple-system, sans-serif';
+    ctx.fillText(text, bannerX + padding, bannerY + 24);
+  }
+}
+
+/**
+ * 在有序帧数组中二分查找最接近 targetTime 的帧
+ * 始终返回最近匹配（不设 maxDiff 限制），无数据返回 null
+ */
+function findNearestFrame(
+  frames: { timestamp: number; detections: TrackedPlateResult[] }[],
+  targetTime: number,
+): { detections: TrackedPlateResult[]; timestamp: number } | null {
+  if (frames.length === 0) return null;
+  if (targetTime <= frames[0].timestamp) return frames[0];
+  if (targetTime >= frames[frames.length - 1].timestamp) return frames[frames.length - 1];
+
+  let lo = 0;
+  let hi = frames.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >> 1;
+    if (frames[mid].timestamp < targetTime) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  const loDiff = Math.abs(frames[lo].timestamp - targetTime);
+  const hiDiff = Math.abs(frames[hi].timestamp - targetTime);
+  return loDiff <= hiDiff ? frames[lo] : frames[hi];
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -151,18 +200,35 @@ const PlateRecognition: React.FC = () => {
   const [wsStatus, setWsStatus] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
   const [trackProgress, setTrackProgress] = useState(0);
   const [trackStatusMsg, setTrackStatusMsg] = useState('');
-  const [currentDetections, setCurrentDetections] = useState<TrackedPlateResult[]>([]);
   const [trackedPlates, setTrackedPlates] = useState<TrackedPlateSummary[]>([]);
-  const [allDetections, setAllDetections] = useState<Map<number, TrackedPlateResult[]>>(new Map());
   const [trackTotalFrames, setTrackTotalFrames] = useState(0);
   const [trackProcessedFrames, setTrackProcessedFrames] = useState(0);
   const [trackDuration, setTrackDuration] = useState(0);
   const [detectionLog, setDetectionLog] = useState<{ time: number; count: number; plateNos: string[] }[]>([]);
 
+  // 按真实时间戳索引的检测结果 (WebSocket 推送时由实际 timestamp 建立)
+  const [timeIndexedDetections, setTimeIndexedDetections] = useState<Map<number, TrackedPlateResult[]>>(new Map());
+  // 有序帧数组 (按 timestamp 升序), 用于二分查找
+  const detectionFramesRef = useRef<{ timestamp: number; detections: TrackedPlateResult[] }[]>([]);
+
+  // 当前视频播放位置对应的检测结果 (由 drawLoop 统一更新)
+  const [playbackDetections, setPlaybackDetections] = useState<TrackedPlateResult[]>([]);
+  const [playbackTimestamp, setPlaybackTimestamp] = useState<number>(0);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const animFrameRef = useRef<number>(0);
+  const hasAutoPlayedRef = useRef(false);
+  const latestProcessedRef = useRef<number>(0);
+  const [showPlayOverlay, setShowPlayOverlay] = useState(true);
+  const [playbackLag, setPlaybackLag] = useState<number>(0);
+
+  // ── Stream 模式 refs ──
+  const streamDetectionsRef = useRef<TrackedPlateResult[]>([]);
+  const streamImgRef = useRef<HTMLImageElement>(null);
+  const streamCanvasRef = useRef<HTMLCanvasElement>(null);
+  const streamAnimFrameRef = useRef<number>(0);
 
   // ── Stream 模式状态 ──
   const [streamUrl, setStreamUrl] = useState('');
@@ -241,21 +307,27 @@ const PlateRecognition: React.FC = () => {
         switch (msg.type) {
           case 'detection': {
             const det = msg as FrameDetection;
-            setCurrentDetections(det.detections);
 
-            // 累积所有帧的检测
-            setAllDetections((prev) => {
+            // 按实际 timestamp 建立索引 (用于 Canvas 和面板的播放同步)
+            const ts = det.timestamp;
+            // 追踪最新处理到的帧时间戳 (用于计算 lag)
+            if (ts > latestProcessedRef.current) {
+              latestProcessedRef.current = ts;
+            }
+            setTimeIndexedDetections((prev) => {
               const next = new Map(prev);
-              next.set(det.frameNumber, det.detections);
+              next.set(ts, det.detections);
               return next;
             });
+            // 有序帧数组: 按 timestamp 升序追加 (后端推流顺序保证有序)
+            detectionFramesRef.current.push({ timestamp: ts, detections: det.detections });
 
             // 记录检测日志
             if (det.detections.length > 0) {
               setDetectionLog((prev) => [
                 ...prev.slice(-99),
                 {
-                  time: det.timestamp,
+                  time: ts,
                   count: det.detections.length,
                   plateNos: det.detections.map((d) => d.plateNo),
                 },
@@ -311,9 +383,15 @@ const PlateRecognition: React.FC = () => {
 
     setTrackLoading(true);
     setTrackedPlates([]);
-    setCurrentDetections([]);
-    setAllDetections(new Map());
+    setTimeIndexedDetections(new Map());
+    detectionFramesRef.current = [];
+    setPlaybackDetections([]);
+    setPlaybackTimestamp(0);
+    setPlaybackLag(0);
+    latestProcessedRef.current = 0;
     setDetectionLog([]);
+    hasAutoPlayedRef.current = false;
+    setShowPlayOverlay(true);
     setTrackProgress(0);
     setTrackStatusMsg('uploading');
     setTrackSessionId(null);
@@ -346,41 +424,42 @@ const PlateRecognition: React.FC = () => {
     return false;
   };
 
-  // 画布绘制循环 (视频 + canvas overlay)
+  // 画布绘制循环 (视频 + canvas overlay + 检测面板同步)
+  // 不论视频是否播放, 只要 video 有 currentTime 就绘制对应帧
   const drawLoop = useCallback(() => {
     if (!canvasRef.current || !videoRef.current) return;
     const video = videoRef.current;
+    if (video.ended) {
+      animFrameRef.current = requestAnimationFrame(drawLoop);
+      return;
+    }
 
-    if (!video.paused && !video.ended) {
-      // 查找当前播放时间最近的检测结果
-      const currentTime = video.currentTime;
-      let bestDetections: TrackedPlateResult[] = [];
-      let bestDiff = Infinity;
+    const currentTime = video.currentTime;
 
-      allDetections.forEach((dets, frameNum) => {
-        // 估算时间戳: frameNum / fps
-        const estTime = trackTotalFrames > 0
-          ? (frameNum / trackTotalFrames) * trackDuration
-          : frameNum / 30;
-        const diff = Math.abs(estTime - currentTime);
-        if (diff < bestDiff && diff < 1.0) {
-          bestDiff = diff;
-          bestDetections = dets;
-        }
-      });
+    // 用真实 timestamp 二分查找 (不再设 maxDiff, 始终返回最近帧)
+    const matched = findNearestFrame(detectionFramesRef.current, currentTime);
 
-      if (bestDetections.length > 0) {
-        drawDetectionsOnCanvas(canvasRef.current, video, bestDetections);
-      } else {
-        const ctx = canvasRef.current.getContext('2d');
-        if (ctx) {
-          ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
-        }
+    if (matched && matched.detections.length > 0) {
+      const lag = Math.max(0, currentTime - latestProcessedRef.current);
+      drawDetectionsOnCanvas(canvasRef.current, video, matched.detections, lag);
+      // 同步更新检测面板
+      setPlaybackDetections(matched.detections);
+      setPlaybackTimestamp(matched.timestamp);
+      setPlaybackLag(lag);
+    } else {
+      const ctx = canvasRef.current.getContext('2d');
+      if (ctx) {
+        ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+      }
+      if (detectionFramesRef.current.length > 0) {
+        // 有检测数据但当前时间无匹配 → 显示空
+        setPlaybackDetections([]);
+        setPlaybackTimestamp(currentTime);
       }
     }
 
     animFrameRef.current = requestAnimationFrame(drawLoop);
-  }, [allDetections, trackTotalFrames, trackDuration]);
+  }, []); // 使用 ref 而非 state 依赖, 避免循环重绘
 
   useEffect(() => {
     if (mode === 'track' && previewUrl && wsStatus === 'connected') {
@@ -391,7 +470,100 @@ const PlateRecognition: React.FC = () => {
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [mode, previewUrl, wsStatus, drawLoop]);
+    // drawLoop 使用 ref 不依赖 state, 故只依赖 mode/previewUrl/wsStatus
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, previewUrl, wsStatus]);
+
+  // 处理完成 → 自动播放视频, 展示完整追踪结果
+  useEffect(() => {
+    if (trackStatusMsg === 'completed' && videoRef.current && !hasAutoPlayedRef.current) {
+      hasAutoPlayedRef.current = true;
+      const v = videoRef.current;
+      v.currentTime = 0;
+      v.play().catch(() => {
+        // 浏览器可能阻止自动播放, 静默处理
+      });
+    }
+  }, [trackStatusMsg]);
+
+  // ═══════════════════════════════════════════════════════════
+  //  Stream 画布绘制循环
+  // ═══════════════════════════════════════════════════════════
+
+  const streamDrawLoop = useCallback(() => {
+    if (!streamCanvasRef.current || !streamImgRef.current) return;
+    const img = streamImgRef.current;
+    const detections = streamDetectionsRef.current;
+
+    const ctx = streamCanvasRef.current.getContext('2d');
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const rect = img.getBoundingClientRect();
+    streamCanvasRef.current.width = rect.width * dpr;
+    streamCanvasRef.current.height = rect.height * dpr;
+    streamCanvasRef.current.style.width = `${rect.width}px`;
+    streamCanvasRef.current.style.height = `${rect.height}px`;
+    ctx.scale(dpr, dpr);
+
+    // 清空
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    // 图像可能还未加载完成
+    if (!img.naturalWidth || !img.naturalHeight) {
+      streamAnimFrameRef.current = requestAnimationFrame(streamDrawLoop);
+      return;
+    }
+
+    const scaleX = rect.width / img.naturalWidth;
+    const scaleY = rect.height / img.naturalHeight;
+
+    for (const d of detections) {
+      const x = d.bbox.x * scaleX;
+      const y = d.bbox.y * scaleY;
+      const w = d.bbox.width * scaleX;
+      const h = d.bbox.height * scaleY;
+      const color = getColorForPlate(d.color);
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(x, y, w, h);
+
+      const label = `${d.plateNo}`;
+      ctx.font = 'bold 14px -apple-system, sans-serif';
+      const tw = ctx.measureText(label).width;
+
+      const labelY = y > 30 ? y - 8 : y + h + 8;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.roundRect(x, labelY - 24, tw + 16, 24, 4);
+      ctx.fill();
+
+      ctx.fillStyle = '#fff';
+      ctx.fillText(label, x + 8, labelY - 7);
+
+      const info = `#${d.trackId} · ${d.color} · ${(d.confidence * 100).toFixed(0)}%`;
+      ctx.font = '11px -apple-system, sans-serif';
+      const infoY = y > 30 ? y - 36 : y + h + 36;
+      ctx.fillStyle = color;
+      ctx.fillText(info, x, infoY);
+    }
+
+    streamAnimFrameRef.current = requestAnimationFrame(streamDrawLoop);
+  }, []);
+
+  // 启动/停止 Stream 画布循环
+  useEffect(() => {
+    if (wsStatus === 'connected' && streamSessionId && mode === 'stream') {
+      streamAnimFrameRef.current = requestAnimationFrame(streamDrawLoop);
+    }
+    return () => {
+      if (streamAnimFrameRef.current) {
+        cancelAnimationFrame(streamAnimFrameRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wsStatus, streamSessionId, mode]);
 
   // 清理
   useEffect(() => {
@@ -401,6 +573,9 @@ const PlateRecognition: React.FC = () => {
       }
       if (animFrameRef.current) {
         cancelAnimationFrame(animFrameRef.current);
+      }
+      if (streamAnimFrameRef.current) {
+        cancelAnimationFrame(streamAnimFrameRef.current);
       }
     };
   }, []);
@@ -433,6 +608,7 @@ const PlateRecognition: React.FC = () => {
           case 'detection': {
             const det = msg as FrameDetection;
             setStreamDetections(det.detections);
+            streamDetectionsRef.current = det.detections;
             break;
           }
           case 'status': {
@@ -736,12 +912,33 @@ const PlateRecognition: React.FC = () => {
       {previewUrl && wsStatus === 'connected' && (
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {/* 视频 + Canvas 叠加 */}
-          <Card title="实时追踪" style={{ flex: '1 1 500px' }}>
+          <Card
+            title={
+              <Space>
+                <span>实时追踪</span>
+                {trackStatusMsg === 'processing' && <Badge status="processing" text={`处理中 ${trackProcessedFrames}/${trackTotalFrames} 帧`} />}
+                {trackStatusMsg === 'completed' && <Badge status="success" text="处理完成" />}
+              </Space>
+            }
+            style={{ flex: '1 1 500px' }}
+            extra={
+              trackStatusMsg === 'completed' ? (
+                <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => {
+                  const v = videoRef.current;
+                  if (v) { v.currentTime = 0; v.play().catch(() => {}); }
+                }}>
+                  播放追踪结果
+                </Button>
+              ) : null
+            }
+          >
             <div style={{ position: 'relative' }}>
               <video
                 ref={videoRef}
                 src={previewUrl}
                 controls
+                onTimeUpdate={() => {}}
+                onPlay={() => setShowPlayOverlay(false)}
                 style={{ maxWidth: '100%', maxHeight: 450, borderRadius: 8, display: 'block' }}
               />
               <canvas
@@ -753,24 +950,55 @@ const PlateRecognition: React.FC = () => {
                   borderRadius: 8,
                 }}
               />
+              {/* 处理完成后的播放引导覆盖层 */}
+              {showPlayOverlay && trackStatusMsg === 'completed' && trackedPlates.length > 0 && (
+                <div
+                  onClick={() => {
+                    setShowPlayOverlay(false);
+                    const v = videoRef.current;
+                    if (v) { v.currentTime = 0; v.play().catch(() => {}); }
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.opacity = '0.85')}
+                  onMouseLeave={(e) => (e.currentTarget.style.opacity = '1')}
+                  style={{
+                    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                    display: 'flex', flexDirection: 'column',
+                    alignItems: 'center', justifyContent: 'center',
+                    background: 'rgba(0,0,0,0.45)',
+                    borderRadius: 8, cursor: 'pointer',
+                    transition: 'opacity 0.3s',
+                  }}
+                >
+                  <div style={{
+                    width: 72, height: 72, borderRadius: '50%',
+                    background: '#1677ff', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center',
+                    boxShadow: '0 4px 20px rgba(22,119,255,0.5)',
+                  }}>
+                    <PlayCircleOutlined style={{ fontSize: 40, color: '#fff' }} />
+                  </div>
+                  <div style={{ color: '#fff', fontSize: 18, fontWeight: 600, marginTop: 16 }}>
+                    点击播放追踪结果
+                  </div>
+                  <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 13, marginTop: 6 }}>
+                    共识别 {trackedPlates.length} 个车牌 · 持续 {trackDuration.toFixed(1)}s
+                  </div>
+                </div>
+              )}
             </div>
-            {trackedPlates.length > 0 && (
-              <Alert
-                style={{ marginTop: 12 }}
-                type="success"
-                message={`追踪完成: 共识别 ${trackedPlates.length} 个车牌, 持续 ${trackDuration.toFixed(1)}s`}
-                showIcon
-              />
-            )}
           </Card>
 
           {/* 实时检测面板 */}
           <div style={{ flex: '1 1 350px', display: 'flex', flexDirection: 'column', gap: 16, minWidth: 300 }}>
-            {/* 当前帧检测 */}
-            <Card title={`当前帧检测 (${currentDetections.length} 个)`} size="small">
-              {currentDetections.length > 0 ? (
+            {/* 当前帧检测 — 与 Canvas 同步 */}
+            <Card title={
+              playbackLag > 0.5
+                ? `当前帧 @${playbackTimestamp.toFixed(1)}s 落后 ${playbackLag.toFixed(1)}s (${playbackDetections.length} 个)`
+                : `当前帧 @${playbackTimestamp.toFixed(1)}s (${playbackDetections.length} 个)`
+            } size="small">
+              {playbackDetections.length > 0 ? (
                 <Space direction="vertical" style={{ width: '100%' }}>
-                  {currentDetections.map((d) => (
+                  {playbackDetections.map((d) => (
                     <div
                       key={d.trackId}
                       style={{
@@ -790,20 +1018,26 @@ const PlateRecognition: React.FC = () => {
                     </div>
                   ))}
                 </Space>
-              ) : (
+              ) : detectionFramesRef.current.length === 0 ? (
                 <Text type="secondary">等待检测结果...</Text>
+              ) : (
+                <Text type="secondary">该时间点无检测结果</Text>
               )}
             </Card>
 
-            {/* 实时日志 */}
-            <Card title="检测日志" size="small" style={{ flex: 1 }}>
+            {/* 实时日志 — 高亮当前播放位置的条目 */}
+            <Card title={`检测日志 (${detectionLog.length})`} size="small" style={{ flex: 1 }}>
               {detectionLog.length > 0 ? (
                 <div style={{ maxHeight: 200, overflow: 'auto' }}>
                   <Table
                     columns={detectionLogColumns}
-                    dataSource={detectionLog.map((d, i) => ({ ...d, key: i }))}
+                    dataSource={detectionLog.map((d, i) => ({ ...d, key: i, _time: d.time }))}
                     pagination={false}
                     size="small"
+                    rowClassName={(record) => {
+                      const diff = Math.abs((record as any)._time - playbackTimestamp);
+                      return diff < 0.5 ? 'current-playback-row' : '';
+                    }}
                   />
                 </div>
               ) : (
@@ -903,54 +1137,93 @@ const PlateRecognition: React.FC = () => {
         </Card>
       )}
 
-      {/* 实时检测 + 汇总 */}
-      {wsStatus === 'connected' && (
+      {/* 实时视频 + 检测面板 */}
+      {wsStatus === 'connected' && streamSessionId && (
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-          {/* 当前帧检测 */}
-          <Card title={`实时检测 (${streamDetections.length} 个)`} style={{ flex: '1 1 400px' }}>
-            {streamDetections.length > 0 ? (
-              <Space direction="vertical" style={{ width: '100%' }}>
-                {streamDetections.map((d) => (
-                  <div
-                    key={d.trackId}
-                    style={{
-                      display: 'flex', justifyContent: 'space-between',
-                      alignItems: 'center', padding: '8px 12px',
-                      background: '#f6f8fa', borderRadius: 6,
-                      border: `2px solid ${getColorForPlate(d.color)}`,
-                    }}
-                  >
-                    <Space>
-                      <Tag color="blue">#{d.trackId}</Tag>
-                      <Text strong style={{ fontSize: 16 }}>{d.plateNo}</Text>
-                      <Tag color={PLATE_COLOR_MAP[d.color]?.color}>
-                        {PLATE_COLOR_MAP[d.color]?.label || d.color}
-                      </Tag>
-                    </Space>
-                    <Text type="secondary">{(d.confidence * 100).toFixed(0)}%  {VEHICLE_TYPE_MAP[d.vehicleType]?.icon}</Text>
-                  </div>
-                ))}
-              </Space>
-            ) : (
-              <div style={{ textAlign: 'center', padding: 40 }}>
-                <Spin indicator={<LoadingOutlined style={{ fontSize: 32 }} />} />
-                <div style={{ marginTop: 16 }}><Text type="secondary">等待流数据...</Text></div>
-              </div>
-            )}
+          {/* 视频播放区: MJPEG 流 + Canvas 覆盖层 */}
+          <Card
+            title="实时视频"
+            style={{ flex: '1 1 500px' }}
+            extra={
+              <Badge status="processing" text={`已处理 ${trackProcessedFrames} 帧`} />
+            }
+          >
+            <div style={{ position: 'relative' }}>
+              <img
+                ref={streamImgRef}
+                src={`/api/plate/stream/${streamSessionId}/mjpeg${''}`}
+                alt="实时流"
+                style={{ maxWidth: '100%', maxHeight: 450, borderRadius: 8, display: 'block' }}
+                onLoad={() => {
+                  // 确保 canvas 尺寸同步
+                  if (streamCanvasRef.current && streamImgRef.current) {
+                    const rect = streamImgRef.current.getBoundingClientRect();
+                    const dpr = window.devicePixelRatio || 1;
+                    streamCanvasRef.current.width = rect.width * dpr;
+                    streamCanvasRef.current.height = rect.height * dpr;
+                    streamCanvasRef.current.style.width = `${rect.width}px`;
+                    streamCanvasRef.current.style.height = `${rect.height}px`;
+                  }
+                }}
+              />
+              <canvas
+                ref={streamCanvasRef}
+                style={{
+                  position: 'absolute', top: 0, left: 0,
+                  width: '100%', height: '100%',
+                  pointerEvents: 'none', borderRadius: 8,
+                }}
+              />
+            </div>
           </Card>
 
-          {/* 汇总 */}
-          {streamPlateSummary.length > 0 && (
-            <Card title={`追踪汇总 (${streamPlateSummary.length} 个车牌)`} style={{ flex: '1 1 400px' }}>
-              <Table
-                columns={trackColumns}
-                dataSource={streamPlateSummary}
-                rowKey="trackId"
-                pagination={false}
-                size="small"
-              />
+          {/* 检测结果面板 */}
+          <div style={{ flex: '1 1 350px', minWidth: 300 }}>
+            <Card title={`实时检测 (${streamDetections.length} 个)`}>
+              {streamDetections.length > 0 ? (
+                <Space direction="vertical" style={{ width: '100%' }}>
+                  {streamDetections.map((d) => (
+                    <div
+                      key={d.trackId}
+                      style={{
+                        display: 'flex', justifyContent: 'space-between',
+                        alignItems: 'center', padding: '8px 12px',
+                        background: '#f6f8fa', borderRadius: 6,
+                        border: `2px solid ${getColorForPlate(d.color)}`,
+                      }}
+                    >
+                      <Space>
+                        <Tag color="blue">#{d.trackId}</Tag>
+                        <Text strong style={{ fontSize: 16 }}>{d.plateNo}</Text>
+                        <Tag color={PLATE_COLOR_MAP[d.color]?.color}>
+                          {PLATE_COLOR_MAP[d.color]?.label || d.color}
+                        </Tag>
+                      </Space>
+                      <Text type="secondary">{(d.confidence * 100).toFixed(0)}%  {VEHICLE_TYPE_MAP[d.vehicleType]?.icon}</Text>
+                    </div>
+                  ))}
+                </Space>
+              ) : (
+                <div style={{ textAlign: 'center', padding: 40 }}>
+                  <Spin indicator={<LoadingOutlined style={{ fontSize: 32 }} />} />
+                  <div style={{ marginTop: 16 }}><Text type="secondary">等待流数据...</Text></div>
+                </div>
+              )}
             </Card>
-          )}
+
+            {/* 汇总 */}
+            {streamPlateSummary.length > 0 && (
+              <Card title={`追踪汇总 (${streamPlateSummary.length} 个车牌)`} style={{ marginTop: 16 }}>
+                <Table
+                  columns={trackColumns}
+                  dataSource={streamPlateSummary}
+                  rowKey="trackId"
+                  pagination={false}
+                  size="small"
+                />
+              </Card>
+            )}
+          </div>
         </div>
       )}
 
@@ -998,6 +1271,17 @@ const PlateRecognition: React.FC = () => {
           </Space>
         }
       />
+
+      {/* 检测日志高亮样式 */}
+      <style>{`
+        .current-playback-row {
+          background: #e6f4ff !important;
+          transition: background 0.15s;
+        }
+        .current-playback-row td {
+          background: #e6f4ff !important;
+        }
+      `}</style>
 
       <Tabs
         activeKey={mode}
