@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi import WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import (
+    auth,
     driver_gesture,
     plate,
     police_gesture,
@@ -9,6 +10,8 @@ from app.api.v1 import (
     history,
     stats
 )
+from app.core.database import SessionLocal, init_db
+from app.api.v1.auth import seed_default_users
 from app.utils.logger import logger
 
 app = FastAPI(
@@ -28,6 +31,7 @@ app.add_middleware(
 )
 
 # 注册所有路由（统一前缀 /api）
+app.include_router(auth.router, prefix="/api", tags=["用户认证"])
 app.include_router(driver_gesture.router, prefix="/api", tags=["车主手势控车"])
 app.include_router(plate.router, prefix="/api", tags=["车牌识别"])
 app.include_router(police_gesture.router, prefix="/api", tags=["交警手势识别"])

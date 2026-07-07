@@ -4,3 +4,28 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pt
+*.task
+*.onnx
+.hyperlpr3/
+
+# Backend - 大型文件不提交
+backend/ctpgr/checkpoints/
+!backend/ctpgr/checkpoints/
+backend/ctpgr/checkpoints/*
+!backend/ctpgr/checkpoints/README.md
+backend/ctpgr/generated/
+backend/ctpgr/.git.backup/
+backend/ctpgr/__pycache__/
+backend/__pycache__/
+backend/models/
+backend/dataset/
+backend/frames/
+backend/runs/
+backend/test_gesture.mp4
+backend/*.log
+
+# 本地环境配置
+.env
+backend/.env
+frontend/.env

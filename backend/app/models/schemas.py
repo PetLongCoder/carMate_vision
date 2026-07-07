@@ -26,6 +26,7 @@ class BBox(BaseModel):
 class PlateResult(BaseModel):
     carId: int
     plateNo: str
+    vehicleType: str   # car / bus / truck / unknown
     color: str   # blue / green / yellow
     confidence: float
     bbox: BBox

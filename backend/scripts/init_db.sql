@@ -1,0 +1,26 @@
+-- 在 DataGrip 中连接腾讯云 MySQL 后执行
+-- 1. 创建数据库（若尚未创建）
+CREATE DATABASE IF NOT EXISTS carmate DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+USE carmate;
+
+-- 2. 后端启动时会自动建表；也可手动执行以下语句
+CREATE TABLE IF NOT EXISTS users (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(50) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  phone VARCHAR(11) UNIQUE,
+  email VARCHAR(100) UNIQUE,
+  role VARCHAR(10) NOT NULL DEFAULT 'user',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS verification_codes (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  target VARCHAR(120) NOT NULL,
+  code VARCHAR(6) NOT NULL,
+  scene VARCHAR(20) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_target (target)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
