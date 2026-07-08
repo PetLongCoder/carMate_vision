@@ -8,6 +8,7 @@
 
 CCPD 数据集：https://github.com/zexi-liu7/CCPD
 """
+import os
 import cv2
 import numpy as np
 import hyperlpr3 as lpr3
@@ -66,19 +67,14 @@ class PlateRecognizer:
     def detect_on_full_image(self, image: np.ndarray) -> list[dict]:
         """
         在全图上检测并识别车牌
-        先做 CLAHE 增强提高低光照场景下的识别率
+        仅对原图进行一次 HyperLPR3 检测（取消双图，提升推理速度）
         """
-        # 图像增强
-        enhanced = enhance_image(image)
-
-        # 同时用原图和增强图检测，提高召回率
         all_results = []
-        for img in [image, enhanced]:
-            try:
-                raw_results = self.catcher(img)
-                all_results.extend(raw_results)
-            except Exception as e:
-                logger.warning(f"HyperLPR3 检测异常: {e}")
+        try:
+            raw_results = self.catcher(image)
+            all_results.extend(raw_results)
+        except Exception as e:
+            logger.warning(f"HyperLPR3 检测异常: {e}")
 
         # 去重：同一车牌号只取置信度最高的
         seen = {}
@@ -160,6 +156,42 @@ _detector: Optional[VehicleDetector] = None
 def get_recognizer() -> PlateRecognizer:
     global _recognizer
     if _recognizer is None:
+        # ── 让 HyperLPR3 使用 GPU ──
+        try:
+            # 把 PyTorch 自带的 cuDNN 目录加入 PATH，让 ONNX Runtime 能找到
+            import torch
+            torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+            if os.path.isdir(torch_lib):
+                os.environ['PATH'] = torch_lib + ';' + os.environ.get('PATH', '')
+                logger.info(f"cuDNN 目录已加入 PATH: {torch_lib}")
+
+            # Monkey-patch: MultiTaskDetectorORT 原硬编码 CPU，改为 CUDA
+            from hyperlpr3.inference.multitask_detect import MultiTaskDetectorORT
+
+            def _gpu_init(self, onnx_path, box_threshold=0.5, nms_threshold=0.6, *args, **kwargs):
+                import onnxruntime as ort
+                self.box_threshold = box_threshold
+                self.nms_threshold = nms_threshold
+                self.session = ort.InferenceSession(
+                    onnx_path,
+                    providers=['CUDAExecutionProvider', 'CPUExecutionProvider'],
+                )
+                self.inputs_option = self.session.get_inputs()
+                self.outputs_option = self.session.get_outputs()
+                input_option = self.inputs_option[0]
+                input_size_ = tuple(input_option.shape[2:])
+                self.input_size = tuple(kwargs.get('input_size', input_size_))
+                if not self.input_size:
+                    self.input_size = input_size_
+                assert self.input_size == input_size_
+                assert self.input_size[0] == self.input_size[1]
+                self.input_name = input_option.name
+
+            MultiTaskDetectorORT.__init__ = _gpu_init
+            logger.info("HyperLPR3 GPU 加速已启用 (CUDA)")
+        except Exception as e:
+            logger.warning(f"HyperLPR3 GPU 加速启用失败，回退 CPU: {e}")
+
         _recognizer = PlateRecognizer()
     return _recognizer
 

@@ -60,9 +60,30 @@ class TrackingSession:
         self.latest_frame: Optional[bytes] = None
         self._frame_cond = asyncio.Condition()
 
+        # 客户端消息通道 (播放驱动)
+        self._latest_sync: Optional[tuple[float, float]] = None  # (recv_time, currentTime)
+        self._sync_event = asyncio.Event()
+
         # WebSocket 连接池 (同一会话可多终端订阅)
         self._ws_connections: list[asyncio.Queue] = []
         self._lock = asyncio.Lock()
+
+    def put_client_message(self, msg: dict):
+        """
+        接收来自前端的播放控制消息
+
+        支持的消息类型:
+        - play/sync/seek: 携带 currentTime, 触发帧处理
+        - pause: 停止处理
+        """
+        msg_type = msg.get("type", "")
+        if msg_type in ("play", "sync", "seek"):
+            current_time = msg.get("currentTime", 0)
+            self._latest_sync = (time.time(), float(current_time))
+            self._sync_event.set()
+        elif msg_type == "pause":
+            self._latest_sync = None
+            self._sync_event.set()  # 唤醒循环让它检查到 None
 
     async def set_frame(self, jpeg_bytes: bytes):
         """更新最新帧并通知等待者 (MJPEG 流用)"""
