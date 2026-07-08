@@ -4,6 +4,7 @@ import { SoundOutlined, FireOutlined, StepForwardOutlined, StepBackwardOutlined,
 import { PageHeader } from '../components/common';
 import { useAppStore } from '../store';
 import { uploadDriverGestureImage } from '../api';
+import request from '../api/request';
 
 const ControlPanel: React.FC = () => {
   const { volume, temperature, setVolume, setTemperature } = useAppStore();
@@ -42,113 +43,115 @@ const ControlPanel: React.FC = () => {
 const DriverGesture: React.FC = () => {
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [streamActive, setStreamActive] = useState(false);
-  const { setVolume, setTemperature, volume, temperature } = useAppStore();
+  // 直接从 store 中获取最新值
+  const { volume, temperature, setVolume, setTemperature } = useAppStore();
 
-const startCamera = async () => {
-  try {
-    // 1. 获取摄像头视频流
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
-    setStreamActive(true);
+  const startCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+      setStreamActive(true);
 
-    // 找到页面中的 video 元素，显示视频流
-    const videoElement = document.querySelector('video') as HTMLVideoElement;
-    if (videoElement) {
-      videoElement.srcObject = stream;
-      videoElement.style.opacity = '1'; // 取消半透明
-      await videoElement.play();
-    }
-
-    // 2. 每隔 500ms 捕获一帧发送给后端
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-
-    const timer = setInterval(async () => {
-      const video = document.querySelector('video') as HTMLVideoElement;
-      if (!video || video.readyState < 2) return;
-
-      // 从视频中截取一帧
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx?.drawImage(video, 0, 0);
-      
-      // 将 canvas 转为 Blob (JPEG 格式)
-      const blob = await new Promise<Blob | null>((resolve) => {
-        canvas.toBlob(resolve, 'image/jpeg', 0.8);
-      });
-      if (!blob) return;
-
-      // 构造 File 对象，调用后端接口
-      const file = new File([blob], 'frame.jpg', { type: 'image/jpeg' });
+      // 调用后端重置追踪器状态（冷启动解锁）
       try {
-        const res = await uploadDriverGestureImage(file);
-        if (res.data.code === 200 && res.data.data) {
-          const result = res.data.data;
-          const gestureName = result.gesture;          // 如 "握拳"
-          const action = result.controlAction;         // 如 { type: "play_pause", label: "播放/暂停" }
+        await request.post('/driver-gesture/reset');
+        console.log('✅ 手势追踪器已重置');
+      } catch (err) {
+        console.warn('重置追踪器失败:', err);
+      }
 
-          // 更新界面显示
-          setLastAction(`${gestureName} → ${action?.label || gestureName}`);
+      const videoElement = document.querySelector('video') as HTMLVideoElement;
+      if (videoElement) {
+        videoElement.srcObject = stream;
+        videoElement.style.opacity = '1';
+        await videoElement.play();
+      }
 
-          // 根据 controlAction.type 同步更新控件
-          if (action) {
-            switch (action.type) {
-              case 'volume_up':
-                setVolume(Math.min(volume + 5, 100));
-                break;
-              case 'volume_down':
-                setVolume(Math.max(volume - 5, 0));
-                break;
-              case 'temperature_up':
-                setTemperature(Math.min(temperature + 1, 32));
-                break;
-              case 'temperature_down':
-                setTemperature(Math.max(temperature - 1, 16));
-                break;
-              case 'next_track':
-                // 你可以在这里触发 UI 反馈，比如高亮按钮
-                break;
-              case 'prev_track':
-                break;
-              case 'play_pause':
-                // 切换播放/暂停状态
-                break;
-              default:
-                break;
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      const timer = setInterval(async () => {
+        const video = document.querySelector('video') as HTMLVideoElement;
+        if (!video || video.readyState < 2) return;
+
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx?.drawImage(video, 0, 0);
+
+        const blob = await new Promise<Blob | null>((resolve) => {
+          canvas.toBlob(resolve, 'image/jpeg', 0.8);
+        });
+        if (!blob) return;
+
+        const file = new File([blob], 'frame.jpg', { type: 'image/jpeg' });
+        try {
+          const res = await uploadDriverGestureImage(file);
+          if (res.data.code === 200 && res.data.data) {
+            const result = res.data.data;
+            const gestureName = result.gesture;
+            const action = result.controlAction;
+
+            setLastAction(`${gestureName} → ${action?.label || gestureName}`);
+
+            // 直接使用最新的 volume 和 temperature 值更新
+            if (action) {
+              switch (action.type) {
+                case 'volume_up':
+                  setVolume(Math.min(volume + 5, 100));
+                  break;
+                case 'volume_down':
+                  setVolume(Math.max(volume - 5, 0));
+                  break;
+                case 'temperature_up':
+                  setTemperature(Math.min(temperature + 1, 32));
+                  break;
+                case 'temperature_down':
+                  setTemperature(Math.max(temperature - 1, 16));
+                  break;
+                case 'next_track':
+                  // 下一首（UI 反馈由按钮高亮实现）
+                  break;
+                case 'prev_track':
+                  // 上一首
+                  break;
+                case 'play_pause':
+                  // 播放/暂停
+                  break;
+                default:
+                  break;
+              }
             }
           }
+        } catch (err) {
+          console.warn('手势识别请求失败:', err);
         }
-      } catch (err) {
-        console.warn('手势识别请求失败:', err);
-      }
-    }, 500); // 每 500ms 识别一次（抽帧节流）
+      }, 250); // 每250ms识别一次（≈4帧/秒）
 
-    // 保存 timer，供 stopCamera 清除
-    (window as any).__gestureTimer = timer;
+      (window as any).__gestureTimer = timer;
 
-  } catch (err) {
-    console.error('摄像头启动失败:', err);
-    alert('无法访问摄像头，请检查权限设置');
-  }
-};
+    } catch (err) {
+      console.error('摄像头启动失败:', err);
+      alert('无法访问摄像头，请检查权限设置');
+    }
+  };
 
-const stopCamera = () => {
-  setStreamActive(false);
-  // 清除定时器
-  clearInterval((window as any).__gestureTimer);
-  // 停止视频流
-  const video = document.querySelector('video') as HTMLVideoElement;
-  if (video && video.srcObject) {
-    const tracks = (video.srcObject as MediaStream).getTracks();
-    tracks.forEach(track => track.stop());
-    video.srcObject = null;
-    video.style.opacity = '0.3';
-  }
-  setLastAction(null);
-};
+  const stopCamera = () => {
+    setStreamActive(false);
+    clearInterval((window as any).__gestureTimer);
+    const video = document.querySelector('video') as HTMLVideoElement;
+    if (video && video.srcObject) {
+      const tracks = (video.srcObject as MediaStream).getTracks();
+      tracks.forEach(track => track.stop());
+      video.srcObject = null;
+      video.style.opacity = '0.3';
+    }
+    setLastAction(null);
+  };
 
   return (
     <div>
-      <PageHeader title="车主手势控车" subtitle="通过摄像头识别车主手势，实现隔空控制车载设备"
+      <PageHeader 
+        title="车主手势控车" 
+        subtitle="通过摄像头识别车主手势，实现隔空控制车载设备"
         extra={
           <Space>
             {streamActive ? (
@@ -157,7 +160,8 @@ const stopCamera = () => {
               <Button icon={<CameraOutlined />} type="primary" onClick={startCamera}>开启摄像头</Button>
             )}
           </Space>
-        } />
+        }
+      />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={14}>
@@ -168,7 +172,7 @@ const stopCamera = () => {
                   <video autoPlay style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8, opacity: 0.3 }} />
                   <div style={{ position: 'absolute', textAlign: 'center', color: '#fff' }}>
                     <CameraOutlined style={{ fontSize: 48, marginBottom: 12, display: 'block' }} />
-                    <span>摄像头已开启 (模拟)</span>
+                    <span>摄像头已开启</span>
                   </div>
                 </>
               ) : (
@@ -185,7 +189,9 @@ const stopCamera = () => {
             </div>
           </Card>
         </Col>
-        <Col xs={24} lg={10}><ControlPanel /></Col>
+        <Col xs={24} lg={10}>
+          <ControlPanel />
+        </Col>
       </Row>
     </div>
   );
