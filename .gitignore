@@ -1,16 +1,21 @@
 node_modules
+
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 *.pt
 *.task
 *.onnx
 .hyperlpr3/
 
-# Backend - 大型文件不提交
+# Backend large/runtime files
 backend/ctpgr/checkpoints/
 !backend/ctpgr/checkpoints/
 backend/ctpgr/checkpoints/*
 !backend/ctpgr/checkpoints/README.md
+!backend/ctpgr/checkpoints/pose_model.pt
+!backend/ctpgr/checkpoints/lstm.pt
 backend/ctpgr/generated/
 backend/ctpgr/.git.backup/
 backend/ctpgr/__pycache__/
@@ -21,8 +26,14 @@ backend/frames/
 backend/runs/
 backend/test_gesture.mp4
 backend/*.log
+backend/.python-packages/
+.pip-cache/
 
-# 本地环境配置
+# Local environment files
 .env
 backend/.env
 frontend/.env
+
+# Local datasets and office temp files
+data/
+~$*.docx

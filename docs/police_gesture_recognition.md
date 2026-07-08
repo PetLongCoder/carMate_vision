@@ -94,8 +94,12 @@ GET /api/health
   "status": "ok",
   "model": "ctpgr-pytorch (Pose + LSTM)",
   "classes": 9,
-  "device": "cpu",
-  "device_mode": "cpu"
+  "device": "cuda",
+  "device_mode": "cuda",
+  "cuda_available": true,
+  "cuda_version": "12.1",
+  "gpu_name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+  "gpu_count": 1
 }
 ```
 
@@ -132,6 +136,17 @@ Content-Type: multipart/form-data
 | frames | 每个采样帧的识别结果 |
 | segments | 连续手势时间段 |
 
+### 4.3 浏览器兼容预览视频
+
+```http
+POST /api/police-gesture/preview
+Content-Type: multipart/form-data
+```
+
+该接口只用于前端预览播放：后端使用 FFmpeg 将上传视频转为浏览器更兼容的 `MP4 + H.264 + yuv420p`，识别分析仍然使用原始上传视频，避免转码影响模型输入。
+
+如果系统没有安装 `ffmpeg`，后端会尝试使用 Python 依赖 `imageio-ffmpeg` 提供的内置 FFmpeg。
+
 ## 5. 今日完成内容
 
 ### 5.1 接入并验证 ctpgr-pytorch 模型
@@ -157,15 +172,28 @@ Content-Type: multipart/form-data
 
 当前处理方案：
 
-- 后端默认使用 CPU 推理，优先保证模型链路稳定。
-- 如需尝试 GPU，可设置环境变量：
+- 后端支持 `auto`、`cuda`、`cpu` 三种设备模式。
+- 默认推荐 `auto`：有可用 NVIDIA CUDA GPU 时使用 GPU，否则自动回退 CPU。
+- 如需强制使用 GPU，可设置环境变量：
 
 ```powershell
 $env:CARMATE_DEVICE="cuda"
 python server.py
 ```
 
-如果 GPU 模式仍然弹出 `python.exe` 应用程序错误，建议继续使用 CPU 模式，后续再单独排查 CUDA、显卡驱动和 PyTorch 版本兼容性。
+也可以在 `backend/.env` 中配置：
+
+```env
+CARMATE_DEVICE=cuda
+```
+
+如果 GPU 模式仍然弹出 `python.exe` 应用程序错误，建议临时改为：
+
+```env
+CARMATE_DEVICE=cpu
+```
+
+后续再单独排查 CUDA、显卡驱动和 PyTorch 版本兼容性。
 
 ### 5.4 修复 CUDA 权重在 CPU 模式下无法加载的问题
 
@@ -199,14 +227,25 @@ torch.load(..., map_location=self.device)
 
 ### 6.1 启动后端
 
+CPU/GPU 自动选择：
+
 ```powershell
 cd D:\code\carMate_vision\carMate_vision\backend
+python server.py
+```
+
+强制 GPU：
+
+```powershell
+cd D:\code\carMate_vision\carMate_vision\backend
+$env:CARMATE_DEVICE="cuda"
 python server.py
 ```
 
 启动成功标志：
 
 ```text
+推理设备: cuda
 模型预加载完成
 CarMate 推理服务已启动 (ctpgr-pytorch)
 Uvicorn running on http://0.0.0.0:8000
@@ -276,7 +315,53 @@ Stop-Process -Id 进程ID
 
 ### 7.4 为什么 CPU 模式比较慢？
 
-当前模型包含姿态估计网络和 LSTM，视频需要逐帧或采样帧进行推理。CPU 模式稳定性更好，但速度会慢于 GPU。当前阶段以验证模型可用性为主，因此默认使用 CPU。
+当前模型包含姿态估计网络和 LSTM，视频需要逐帧或采样帧进行推理。CPU 模式稳定性更好，但速度会慢于 GPU。如果本机有可用 NVIDIA CUDA 环境，建议使用 `CARMATE_DEVICE=auto` 或 `CARMATE_DEVICE=cuda`。
+
+### 7.5 如何确认已经使用 GPU？
+
+启动后访问：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+```
+
+如果返回里包含：
+
+```json
+{
+  "device": "cuda",
+  "cuda_available": true,
+  "gpu_name": "NVIDIA GeForce RTX 4070 Laptop GPU"
+}
+```
+
+说明交警手势模型已经运行在 GPU 模式。
+
+### 7.6 为什么动作标签出现得比视频动作晚？
+
+交警手势是连续动作，LSTM 通常要观察一小段动作后才会稳定输出类别。后端提供了标签时间补偿参数：
+
+```env
+CARMATE_LABEL_TIME_OFFSET_SECONDS=0.8
+```
+
+这个值会把视频标注时间整体向前移动，减少“动作快结束才出现标签”的体感延迟。如果标签仍然偏晚，可以尝试调到 `1.0` 或 `1.2`；如果标签出现太早，可以调回 `0.5`。
+
+### 7.7 为什么有些视频后端能分析但浏览器不能播放？
+
+后端 OpenCV/FFmpeg 能读取的视频格式比浏览器 `<video>` 支持范围更宽。浏览器最稳的是 `MP4 + H.264 + yuv420p`。项目已增加自动预览转码接口：
+
+```env
+CARMATE_PREVIEW_MAX_WIDTH=1280
+CARMATE_PREVIEW_CRF=23
+CARMATE_PREVIEW_TRANSCODE_TIMEOUT_SECONDS=300
+```
+
+前端上传视频后会自动请求浏览器兼容预览版；如果本机没有系统 FFmpeg，请先安装依赖：
+
+```powershell
+pip install -r backend/requirements.txt
+```
 
 ## 8. 后续优化方向
 

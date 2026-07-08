@@ -4,4 +4,6 @@ checkpoints
 !checkpoints/
 checkpoints/*
 !checkpoints/README.md
+!checkpoints/pose_model.pt
+!checkpoints/lstm.pt
 generated

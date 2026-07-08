@@ -1,4 +1,14 @@
+// ============================================================
 // 车牌识别结果
+// ============================================================
+
+export interface BBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface PlateResult {
   carId: number;
   plateNo: string;
@@ -8,14 +18,118 @@ export interface PlateResult {
   bbox: BBox;
 }
 
-export interface BBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
+// ============================================================
+// 实时追踪类型
+// ============================================================
+
+/** 帧检测结果 (WebSocket detection 消息) */
+export interface FrameDetection {
+  type: 'detection';
+  sessionId: string;
+  frameNumber: number;
+  timestamp: number;
+  fps: number;
+  detections: TrackedPlateResult[];
+  processingMs: number;
 }
 
+/** 单个追踪车牌 (帧检测结果中的一项) */
+export interface TrackedPlateResult {
+  trackId: number;
+  plateNo: string;
+  color: string;
+  vehicleType: string;
+  confidence: number;
+  bbox: BBox;
+  appearances: number;
+  firstSeen: number;
+}
+
+/** 会话状态 (WebSocket status 消息) */
+export interface SessionStatusMsg {
+  type: 'status';
+  sessionId: string;
+  status: 'pending' | 'processing' | 'completed' | 'error' | 'stopped';
+  progress: number;
+  framesProcessed: number;
+  totalFrames: number;
+}
+
+/** 追踪汇总 (WebSocket summary 消息) */
+export interface TrackingSummary {
+  type: 'summary';
+  sessionId: string;
+  totalFrames: number;
+  processedFrames: number;
+  duration: number;
+  plates: TrackedPlateSummary[];
+}
+
+/** 稳定追踪车牌汇总 */
+export interface TrackedPlateSummary {
+  trackId: number;
+  plateNo: string;
+  color: string;
+  vehicleType: string;
+  confidence: number;
+  firstSeen: number;
+  lastSeen: number;
+  appearances: number;
+  bbox: BBox;
+}
+
+/** WebSocket 错误消息 */
+export interface WsErrorMessage {
+  type: 'error';
+  sessionId?: string;
+  message: string;
+}
+
+/** 联合类型: 所有可能的 WebSocket 消息 */
+export type WsPlateMessage =
+  | FrameDetection
+  | SessionStatusMsg
+  | TrackingSummary
+  | WsErrorMessage;
+
+/** 追踪会话信息 (REST API) */
+export interface TrackingSessionInfo {
+  sessionId: string;
+  type: 'video' | 'stream';
+  status: string;
+  source: string;
+  totalFrames: number;
+  processedFrames: number;
+  fps: number;
+  wsConnections: number;
+  createdAt: string;
+  updatedAt: string;
+  errorMessage: string | null;
+}
+
+/** 创建追踪会话响应 */
+export interface TrackSessionResponse {
+  sessionId: string;
+  fileName: string;
+  fileSize: number;
+  totalFrames: number;
+  status: string;
+  wsEndpoint: string;
+}
+
+/** 启动流追踪响应 */
+export interface StreamStartResponse {
+  sessionId: string;
+  name: string;
+  url: string;
+  status: string;
+  wsEndpoint: string;
+}
+
+// ============================================================
 // 交警手势识别结果
+// ============================================================
+
 export interface PoliceGestureResult {
   gesture: string;
   gestureId: number;
@@ -23,7 +137,10 @@ export interface PoliceGestureResult {
   timestamp: number;
 }
 
+// ============================================================
 // 车主手势识别结果
+// ============================================================
+
 export interface DriverGestureResult {
   gesture: string;
   gestureId: number;
@@ -36,7 +153,10 @@ export interface ControlAction {
   label: string;
 }
 
+// ============================================================
 // 告警
+// ============================================================
+
 export interface Alert {
   id: number;
   level: AlertLevel;
@@ -49,7 +169,10 @@ export interface Alert {
 
 export type AlertLevel = 'info' | 'warning' | 'critical';
 
+// ============================================================
 // 历史记录
+// ============================================================
+
 export interface HistoryRecord {
   id: number;
   type: 'plate' | 'police_gesture' | 'driver_gesture';
@@ -58,7 +181,10 @@ export interface HistoryRecord {
   createdAt: string;
 }
 
+// ============================================================
 // 统计数据
+// ============================================================
+
 export interface DashboardStats {
   totalPlates: number;
   totalGestures: number;
@@ -66,14 +192,20 @@ export interface DashboardStats {
   unreadAlerts: number;
 }
 
+// ============================================================
 // API 通用响应
+// ============================================================
+
 export interface ApiResponse<T> {
   code: number;
   message: string;
   data: T;
 }
 
+// ============================================================
 // 用户认证
+// ============================================================
+
 export type UserRole = 'user' | 'admin';
 
 export interface User {
