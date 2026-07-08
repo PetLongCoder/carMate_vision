@@ -196,7 +196,7 @@ backend/ctpgr/checkpoints/lstm.pt
 在 `backend` 目录下运行：
 
 ```powershell
-python server.py
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 正常启动后，浏览器访问：
@@ -428,7 +428,7 @@ python -m venv .venv
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 copy .env.example .env
-python server.py
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### 前端
