@@ -3,7 +3,6 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 import cv2
 import numpy as np
 from app.utils.logger import logger
-from app.services.plate_recognition import recognize_plates, recognize_plates_from_video
 
 router = APIRouter()
 
@@ -20,6 +19,12 @@ async def recognize_plate(file: UploadFile = File(...)):
     接收图片或视频 → 检测车辆 → 识别车牌 → 返回 PlateResult[]
     """
     logger.info(f"收到车牌识别请求: {file.filename} (type={file.content_type})")
+
+    try:
+        from app.services.plate_recognition import recognize_plates, recognize_plates_from_video
+    except Exception as exc:
+        logger.error(f"车牌识别模块加载失败: {exc}")
+        raise HTTPException(status_code=503, detail="车牌识别模块未就绪，请稍后重试") from exc
 
     contents = await file.read()
     if not contents:

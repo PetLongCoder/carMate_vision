@@ -7,7 +7,8 @@ from app.api.v1 import (
     police_gesture,
     alerts,
     history,
-    stats
+    stats,
+    wechat,
 )
 from app.core.database import SessionLocal, init_db
 from app.api.v1.auth import seed_default_users
@@ -31,6 +32,7 @@ app.add_middleware(
 
 # 注册所有路由（统一前缀 /api）
 app.include_router(auth.router, prefix="/api", tags=["用户认证"])
+app.include_router(wechat.router, prefix="/api", tags=["微信登录(Mock)"])
 app.include_router(driver_gesture.router, prefix="/api", tags=["车主手势控车"])
 app.include_router(plate.router, prefix="/api", tags=["车牌识别"])
 app.include_router(police_gesture.router, prefix="/api", tags=["交警手势识别"])

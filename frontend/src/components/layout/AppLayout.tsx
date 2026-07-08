@@ -13,6 +13,7 @@ import {
   BellOutlined,
   UserOutlined,
   LogoutOutlined,
+  ProfileOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
@@ -62,6 +63,15 @@ const AppLayout: React.FC = () => {
   );
 
   const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'profile',
+      icon: <ProfileOutlined />,
+      label: '用户信息',
+      onClick: () => navigate('/profile'),
+    },
+    {
+      type: 'divider',
+    },
     {
       key: 'logout',
       icon: <LogoutOutlined />,

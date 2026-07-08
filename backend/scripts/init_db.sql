@@ -12,6 +12,10 @@ CREATE TABLE IF NOT EXISTS users (
   phone VARCHAR(11) UNIQUE,
   email VARCHAR(100) UNIQUE,
   role VARCHAR(10) NOT NULL DEFAULT 'user',
+  wechat_openid VARCHAR(64) UNIQUE,
+  wechat_unionid VARCHAR(64) UNIQUE,
+  nickname VARCHAR(64),
+  avatar_url VARCHAR(255),
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

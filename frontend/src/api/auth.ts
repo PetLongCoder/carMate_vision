@@ -12,6 +12,18 @@ import type {
   SendSmsCodeRequest,
   SendEmailCodeRequest,
   VerifySmsCodeRequest,
+  WechatQrcodeResponse,
+  WechatPollResponse,
+  WechatBindPollResponse,
+  BindEmailRequest,
+  BindPhoneRequest,
+  ChangePasswordRequest,
+  DeleteAccountRequest,
+  RebindEmailRequest,
+  RebindPhoneRequest,
+  SecureCodeScene,
+  UnbindCodeRequest,
+  UpdateProfileRequest,
 } from '../types';
 
 const USE_MOCK = import.meta.env.VITE_USE_MOCK_AUTH !== 'false';
@@ -312,6 +324,106 @@ export async function getCurrentUser(): Promise<User> {
   }
 
   const res = await request.get<ApiResponse<User>>('/auth/me');
+  return res.data.data;
+}
+
+export async function updateProfile(data: UpdateProfileRequest): Promise<User> {
+  const res = await request.put<ApiResponse<User>>('/auth/profile', data);
+  return res.data.data;
+}
+
+export async function bindPhone(data: BindPhoneRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/bind/phone', data);
+  return res.data.data;
+}
+
+export async function bindEmail(data: BindEmailRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/bind/email', data);
+  return res.data.data;
+}
+
+export async function getWechatQrcode(): Promise<WechatQrcodeResponse> {
+  const res = await request.get<ApiResponse<WechatQrcodeResponse>>('/auth/wechat/qrcode');
+  return res.data.data;
+}
+
+export async function pollWechatLogin(state: string): Promise<WechatPollResponse> {
+  const res = await request.get<ApiResponse<WechatPollResponse>>('/auth/wechat/poll', {
+    params: { state },
+  });
+  return res.data.data;
+}
+
+export async function getWechatBindQrcode(): Promise<WechatQrcodeResponse> {
+  const res = await request.get<ApiResponse<WechatQrcodeResponse>>('/auth/wechat/bind/qrcode');
+  return res.data.data;
+}
+
+export async function pollWechatBind(state: string): Promise<WechatBindPollResponse> {
+  const res = await request.get<ApiResponse<WechatBindPollResponse>>('/auth/wechat/bind/poll', {
+    params: { state },
+  });
+  return res.data.data;
+}
+
+export async function sendSecureSmsCode(scene: SecureCodeScene): Promise<void> {
+  await request.post<ApiResponse<null>>('/auth/account/sms/send', { scene });
+}
+
+export async function sendSecureEmailCode(scene: SecureCodeScene): Promise<void> {
+  await request.post<ApiResponse<null>>('/auth/account/email/send', { scene });
+}
+
+export async function unbindPhone(data: UnbindCodeRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/unbind/phone', data);
+  return res.data.data;
+}
+
+export async function unbindEmail(data: UnbindCodeRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/unbind/email', data);
+  return res.data.data;
+}
+
+export async function rebindPhone(data: RebindPhoneRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/rebind/phone', data);
+  return res.data.data;
+}
+
+export async function rebindEmail(data: RebindEmailRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/rebind/email', data);
+  return res.data.data;
+}
+
+export async function deleteAccount(data: DeleteAccountRequest): Promise<void> {
+  await request.post<ApiResponse<null>>('/auth/account/delete', data);
+}
+
+export async function changePassword(data: ChangePasswordRequest): Promise<User> {
+  const res = await request.post<ApiResponse<User>>('/auth/account/change-password', data);
+  return res.data.data;
+}
+
+export async function getWechatUnbindQrcode(): Promise<WechatQrcodeResponse> {
+  const res = await request.get<ApiResponse<WechatQrcodeResponse>>('/auth/wechat/unbind/qrcode');
+  return res.data.data;
+}
+
+export async function pollWechatUnbind(state: string): Promise<WechatBindPollResponse> {
+  const res = await request.get<ApiResponse<WechatBindPollResponse>>('/auth/wechat/unbind/poll', {
+    params: { state },
+  });
+  return res.data.data;
+}
+
+export async function getWechatRebindQrcode(): Promise<WechatQrcodeResponse> {
+  const res = await request.get<ApiResponse<WechatQrcodeResponse>>('/auth/wechat/rebind/qrcode');
+  return res.data.data;
+}
+
+export async function pollWechatRebind(state: string): Promise<WechatBindPollResponse> {
+  const res = await request.get<ApiResponse<WechatBindPollResponse>>('/auth/wechat/rebind/poll', {
+    params: { state },
+  });
   return res.data.data;
 }
 
