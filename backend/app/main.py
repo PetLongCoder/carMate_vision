@@ -164,6 +164,23 @@ async def ws_plate_track(websocket: WebSocket, session_id: str):
     queue: asyncio.Queue = asyncio.Queue(maxsize=256)
     await session.register_ws(queue)
 
+    # 后台任务: 接收前端播放控制消息 (play/pause/seek/sync)
+    async def client_reader():
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    msg = __import__("json").loads(data)
+                    session.put_client_message(msg)
+                except Exception:
+                    pass
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+
+    reader_task = asyncio.create_task(client_reader())
+
     try:
         # 如果会话还没开始处理, 立即启动后台任务
         if session.status in (SessionStatus.PENDING,):
@@ -209,6 +226,7 @@ async def ws_plate_track(websocket: WebSocket, session_id: str):
     except Exception as exc:
         logger.exception(f"WebSocket 异常 [{session_id}]: {exc}")
     finally:
+        reader_task.cancel()
         await session.unregister_ws(queue)
 
 
