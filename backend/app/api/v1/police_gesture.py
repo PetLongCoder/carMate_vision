@@ -3,36 +3,35 @@ import time
 from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
 from app.utils.logger import logger
-
-from server import (
+from app.services.police_gesture_service import (
     GESTURE_NAMES_CN,
     VIDEO_EXTENSIONS,
-    _process_image,
-    _process_video,
-    _remove_files,
-    _stream_states,
-    _transcode_browser_preview,
     get_torch_device_info,
+    is_model_loaded,
     preload_model,
-    recognize_police_gesture_stream_frame as _recognize_police_gesture_stream_frame,
-    recognize_police_gesture_stream_video as _recognize_police_gesture_stream_video,
+    process_police_gesture_image,
+    process_police_gesture_video,
+    generate_police_gesture_video_stream,
+    process_stream_frame,
+    reset_stream_state,
+    remove_files,
+    transcode_browser_preview,
 )
-
 
 router = APIRouter()
 _models_loaded = False
 
 
 def ensure_police_gesture_model_loaded():
-    """Lazy-load ctpgr models for the unified backend."""
+    """Lazy-load 交警手势模型"""
     global _models_loaded
-    if _models_loaded:
+    if _models_loaded or is_model_loaded():
+        _models_loaded = True
         return
-
     logger.info("统一后端正在加载交警手势识别模型")
     preload_model()
     _models_loaded = True
@@ -53,32 +52,37 @@ async def health_check():
 async def recognize_police_gesture(file: UploadFile = File(...)):
     """交警手势识别 - 支持图片或视频。"""
     ensure_police_gesture_model_loaded()
-
     contents = await file.read()
     file_ext = Path(file.filename or "image.jpg").suffix.lower()
     timestamp = int(time.time() * 1000)
-
     try:
         if file_ext in VIDEO_EXTENSIONS:
-            return await _process_video(contents, file_ext, timestamp)
-        return await _process_image(contents, timestamp)
-    except HTTPException:
-        raise
+            return process_police_gesture_video(contents, file_ext, timestamp)
+        return process_police_gesture_image(contents, timestamp)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as exc:
         logger.exception(f"交警手势识别失败: {exc}")
-        raise HTTPException(500, f"识别失败: {str(exc)}") from exc
+        raise HTTPException(500, f"识别失败: {str(exc)}")
 
 
 @router.post("/police-gesture/recognize/stream")
 async def recognize_police_gesture_stream_video(file: UploadFile = File(...)):
-    """上传视频边分析边返回结果。"""
+    """上传视频边分析边返回结果（SSE）。"""
     ensure_police_gesture_model_loaded()
-    return await _recognize_police_gesture_stream_video(file)
+    contents = await file.read()
+    file_ext = Path(file.filename or "video.mp4").suffix.lower()
+    if file_ext not in VIDEO_EXTENSIONS:
+        raise HTTPException(400, "流式识别仅支持视频文件")
+    return StreamingResponse(
+        generate_police_gesture_video_stream(contents, file_ext),
+        media_type="text/event-stream",
+    )
 
 
 @router.post("/police-gesture/stream/reset")
 async def reset_police_gesture_stream(stream_id: str = Form("default")):
-    _stream_states.pop(stream_id, None)
+    reset_stream_state(stream_id)
     return {"code": 200, "message": "success", "data": {"streamId": stream_id}}
 
 
@@ -89,7 +93,14 @@ async def recognize_police_gesture_stream_frame(
 ):
     """实时摄像头截帧识别。"""
     ensure_police_gesture_model_loaded()
-    return await _recognize_police_gesture_stream_frame(file, stream_id)
+    contents = await file.read()
+    try:
+        return process_stream_frame(contents, stream_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as exc:
+        logger.exception(f"实时帧识别失败: {exc}")
+        raise HTTPException(500, f"识别失败: {str(exc)}")
 
 
 @router.post("/police-gesture/preview")
@@ -109,14 +120,17 @@ async def create_police_gesture_preview(file: UploadFile = File(...)):
     out_tmp.close()
 
     try:
-        _transcode_browser_preview(src_path, out_path)
+        transcode_browser_preview(src_path, out_path)
+    except RuntimeError as e:
+        remove_files([src_path, out_path])
+        raise HTTPException(500, str(e))
     except Exception:
-        _remove_files([src_path, out_path])
+        remove_files([src_path, out_path])
         raise
 
     return FileResponse(
         out_path,
         media_type="video/mp4",
         filename=f"{Path(file.filename or 'preview').stem}_preview.mp4",
-        background=BackgroundTask(_remove_files, [src_path, out_path]),
+        background=BackgroundTask(remove_files, [src_path, out_path]),
     )
