@@ -28,7 +28,7 @@ const theme = {
 
 const HomePage: React.FC = () => {
   const isAdmin = useAuthStore((s) => s.isAdmin());
-  return isAdmin ? <Dashboard /> : <Navigate to="/plate" replace />;
+  return <Navigate to="/plate" replace />;
 };
 
 const AuthenticatedApp: React.FC = () => {

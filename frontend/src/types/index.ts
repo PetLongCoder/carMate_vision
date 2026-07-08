@@ -124,6 +124,8 @@ export interface StreamStartResponse {
   url: string;
   status: string;
   wsEndpoint: string;
+  pushEnabled: boolean;
+  pushUrl: string | null;
 }
 
 // ============================================================

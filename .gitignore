@@ -1,39 +1,37 @@
-node_modules
 
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pt
-*.task
-*.onnx
-.hyperlpr3/
-
-# Backend large/runtime files
-backend/ctpgr/checkpoints/
 !backend/ctpgr/checkpoints/
-backend/ctpgr/checkpoints/*
-!backend/ctpgr/checkpoints/README.md
-!backend/ctpgr/checkpoints/pose_model.pt
 !backend/ctpgr/checkpoints/lstm.pt
-backend/ctpgr/generated/
+!backend/ctpgr/checkpoints/pose_model.pt
+!backend/ctpgr/checkpoints/README.md
+# Backend large/runtime files
+# Local datasets and office temp files
+# Local environment files
+*.onnx
+*.pt
+*.pyc
+*.pyd
+*.pyo
+*.task
+.env
+.hyperlpr3/
+.pip-cache/
+__pycache__/
+~$*.docx
+backend/*.log
+backend/.env
+backend/.python-packages/
+backend/__pycache__/
 backend/ctpgr/.git.backup/
 backend/ctpgr/__pycache__/
-backend/__pycache__/
-backend/models/
+backend/ctpgr/checkpoints/
+backend/ctpgr/checkpoints/*
+backend/ctpgr/generated/
 backend/dataset/
 backend/frames/
+backend/models/
 backend/runs/
 backend/test_gesture.mp4
-backend/*.log
-backend/.python-packages/
-.pip-cache/
-
-# Local environment files
-.env
-backend/.env
-frontend/.env
-
-# Local datasets and office temp files
 data/
-~$*.docx
+frontend/.env
+node_modules
+test_video.mp4

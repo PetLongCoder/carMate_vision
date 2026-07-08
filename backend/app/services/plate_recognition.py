@@ -54,7 +54,9 @@ def enhance_image(image: np.ndarray) -> np.ndarray:
 class PlateRecognizer:
     """
     HyperLPR3 车牌识别器
-    在全图上直接检测+识别车牌（内置 CCPD 训练的模型）
+
+    在全图上直接检测+识别车牌（单次原图检测）。
+    远处/小尺寸车牌通过 VehicleDetector 裁切放大后单独识别。
     """
 
     def __init__(self, detect_level: int = None):
@@ -66,17 +68,18 @@ class PlateRecognizer:
 
     def detect_on_full_image(self, image: np.ndarray) -> list[dict]:
         """
-        在全图上检测并识别车牌
-        仅对原图进行一次 HyperLPR3 检测（取消双图，提升推理速度）
+        在全图上检测并识别车牌（单次原图检测）。
         """
         all_results = []
-        try:
-            raw_results = self.catcher(image)
-            all_results.extend(raw_results)
-        except Exception as e:
-            logger.warning(f"HyperLPR3 检测异常: {e}")
 
-        # 去重：同一车牌号只取置信度最高的
+        try:
+            raw = self.catcher(image)
+            all_results.extend(raw)
+        except Exception as e:
+            logger.warning("HyperLPR3 检测异常: %s", e)
+
+        CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.5)
+
         seen = {}
         for code, confidence, type_idx, box in all_results:
             if code not in seen or confidence > seen[code][0]:
@@ -85,7 +88,7 @@ class PlateRecognizer:
         results = []
         for code, (confidence, type_idx, box) in seen.items():
             conf = round(float(confidence), 4)
-            if conf < 0.5:  # 低置信度丢弃，避免错误识别
+            if conf < CONF_THRESHOLD:
                 continue
             x1, y1, x2, y2 = map(int, box)
             color = PLATE_COLOR_MAP.get(type_idx, "blue")
@@ -101,8 +104,16 @@ class PlateRecognizer:
                 },
             })
 
-        logger.info(f"HyperLPR3 识别到 {len(results)} 个车牌")
+        logger.info("HyperLPR3 识别到 %d 个车牌", len(results))
         return results
+
+
+# ─── 环境变量工具（便于动态调参） ─────────────────────
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 class VehicleDetector:
@@ -111,6 +122,11 @@ class VehicleDetector:
     def __init__(self, model_path: str = "yolov8n.pt", conf: float = 0.5):
         logger.info(f"正在加载 YOLOv8 模型: {model_path}")
         self.model = YOLO(model_path)
+        # 显式使用 GPU
+        import torch
+        if torch.cuda.is_available():
+            self.model.to('cuda')
+            logger.info("YOLOv8 已移至 GPU (CUDA)")
         self.conf = conf
         logger.info("YOLOv8 模型加载完成")
 
@@ -205,49 +221,95 @@ def get_detector() -> VehicleDetector:
 
 def recognize_plates(image: np.ndarray) -> list[dict]:
     """
-    车牌识别完整 pipeline
+    车牌识别完整 pipeline（性能优化版）
 
     策略：
-    1. HyperLPR3 全图检测+识别车牌（核心，模型基于 CCPD 训练）
-    2. YOLOv8 车辆检测（辅助，用于车牌→车辆归属）
+    1. YOLOv8 检测车辆（已在 GPU 上运行）
+    2. 对每辆车裁切区域 → 自适应放大 → HyperLPR3 检测车牌
+       - 近处大车: 1.3x 放大（省时）
+       - 远处小车: 2.0x 放大（保召回）
+    3. 跳过全图 HyperLPR3（车裁切方案已覆盖超远距离车牌）
 
-    返回 PlateResult[] 格式（符合前端接口文档）
+    返回 PlateResult[] 格式
     """
     recognizer = get_recognizer()
+    detector = get_detector()
+    h, w = image.shape[:2]
 
-    # 1. HyperLPR3 全图车牌检测
-    plates = recognizer.detect_on_full_image(image)
+    # ── 1. YOLOv8 车辆检测 ──
+    vehicles = detector.detect(image)
 
-    if not plates:
+    if not vehicles:
+        # 保底：没有车辆时还是做一次全图检测
+        plates = recognizer.detect_on_full_image(image)
+        if plates:
+            for i, p in enumerate(plates):
+                p["carId"] = i + 1
+                p["vehicleType"] = "unknown"
+            return plates
+        return []
+
+    # ── 2. 对每辆车裁切 → 放大 → 检测 ──
+    all_plates = []
+    VEHICLE_PADDING_RATIO = 0.15
+
+    for v in vehicles:
+        vb = v["bbox"]
+        # 根据车辆大小决定放大倍数
+        veh_area = vb["width"] * vb["height"]
+        frame_area = w * h
+        scale = 2.0 if (veh_area / frame_area) < 0.08 else 1.3
+
+        pad_x = int(vb["width"] * VEHICLE_PADDING_RATIO)
+        pad_y = int(vb["height"] * VEHICLE_PADDING_RATIO)
+        x1 = max(0, vb["x"] - pad_x)
+        y1 = max(0, vb["y"] - pad_y)
+        x2 = min(w, vb["x"] + vb["width"] + pad_x)
+        y2 = min(h, vb["y"] + vb["height"] + pad_y)
+
+        vehicle_crop = image[y1:y2, x1:x2]
+        if vehicle_crop.shape[0] < 40 or vehicle_crop.shape[1] < 40:
+            continue
+
+        crop_big = cv2.resize(vehicle_crop, None, fx=scale, fy=scale,
+                              interpolation=cv2.INTER_LINEAR)
+
+        for plate in recognizer.detect_on_full_image(crop_big):
+            pb = plate["bbox"]
+            plate["bbox"] = {
+                "x": int(pb["x"] / scale) + x1,
+                "y": int(pb["y"] / scale) + y1,
+                "width": int(pb["width"] / scale),
+                "height": int(pb["height"] / scale),
+            }
+            all_plates.append(plate)
+
+    if not all_plates:
         logger.info("未识别到车牌")
         return []
 
-    # 2. YOLOv8 车辆检测（辅助匹配 carId）
-    detector = get_detector()
-    vehicles = detector.detect(image)
+    # ── 3. 去重 + 匹配车辆 ──
+    seen: dict[str, dict] = {}
+    for p in all_plates:
+        no = p["plate_no"]
+        if no not in seen or p["confidence"] > seen[no]["confidence"]:
+            seen[no] = p
 
-    # 3. 组装结果（含车辆类型）
     results = []
-    seen_plates = set()
-    for i, plate in enumerate(plates):
-        if plate["plate_no"] in seen_plates:
+    for i, (_, plate) in enumerate(seen.items()):
+        if not _is_valid_plate(plate["plate_no"]):
             continue
-        seen_plates.add(plate["plate_no"])
-
-        # 匹配车牌所属车辆
         matched_vehicle = _match_plate_to_vehicle(plate["bbox"], vehicles)
-        vehicle_type = matched_vehicle["class_name"] if matched_vehicle else "unknown"
-
         results.append({
             "carId": i + 1,
             "plateNo": plate["plate_no"],
-            "vehicleType": vehicle_type,
+            "vehicleType": matched_vehicle["class_name"] if matched_vehicle else "unknown",
             "color": plate["color"],
             "confidence": plate["confidence"],
             "bbox": plate["bbox"],
         })
 
-    logger.info(f"最终返回 {len(results)} 个车牌识别结果")
+    logger.info("识别到 %d 个车牌（%d 辆车裁切）", len(results), len(vehicles))
     return results
 
 
@@ -262,6 +324,24 @@ def _plate_core(plate_no: str) -> str:
         if ch.isascii() and (ch.isalnum() or ch in "-·"):
             core += ch
     return core.upper()
+
+
+def _is_valid_plate(plate_no: str) -> bool:
+    """检查车牌号格式是否合理，过滤明显误检。
+
+    中国车牌规则：
+    - 以中文省份简称开头（如"川"、"冀"、"京"等）
+    - 总长度至少 6 位
+    - 无中文前缀的识别结果几乎都是误检，直接过滤
+    """
+    if not plate_no or len(plate_no) < 6:
+        return False
+    # 第一个字符必须是中文（省份简称）
+    if not (plate_no[0] >= '一' and plate_no[0] <= '鿿'):
+        return False
+    # 中文字符后至少跟 5 个字母数字
+    core = _plate_core(plate_no)
+    return len(core) >= 5
 
 
 def _plates_are_same(a: str, b: str, threshold: float = 0.55) -> bool:
@@ -340,11 +420,9 @@ def recognize_plates_from_video(video_bytes: bytes) -> list[dict]:
             for m in merged:
                 if _plates_are_same(p["plateNo"], m["plateNo"]):
                     found = True
-                    # 保留最高置信度的车牌号
                     if p["confidence"] > m["confidence"]:
                         m["plateNo"] = p["plateNo"]
                         m["confidence"] = p["confidence"]
-                    # 用更宽泛的 bbox（安全第一）
                     m["bbox"]["x"] = min(m["bbox"]["x"], p["bbox"]["x"])
                     m["bbox"]["y"] = min(m["bbox"]["y"], p["bbox"]["y"])
                     m["bbox"]["width"] = max(
@@ -355,22 +433,24 @@ def recognize_plates_from_video(video_bytes: bytes) -> list[dict]:
                         m["bbox"]["y"] + m["bbox"]["height"],
                         p["bbox"]["y"] + p["bbox"]["height"],
                     ) - m["bbox"]["y"]
-                    # 更新 timestamp 范围
-                    if "timestampStart" not in m:
-                        m["timestampStart"] = m["timestamp"]
-                    m["timestampStart"] = min(m["timestampStart"], p["timestamp"])
-                    m["timestamp"] = max(m["timestamp"], p["timestamp"])
+                    m["firstSeen"] = min(m["firstSeen"], p["timestamp"])
+                    m["lastSeen"] = max(m["lastSeen"], p["timestamp"])
                     break
             if not found:
-                merged.append(p)
+                merged.append({
+                    **p,
+                    "firstSeen": p["timestamp"],
+                    "lastSeen": p["timestamp"],
+                })
 
-        # 重新编号 carId
+        # 过滤明显误检的车牌号
+        merged = [m for m in merged if _is_valid_plate(m["plateNo"])]
+        merged.sort(key=lambda x: x["firstSeen"])
         for i, m in enumerate(merged):
             m["carId"] = i + 1
-            # 如果有时间范围，标记
-            if "timestampStart" in m and m["timestampStart"] != m["timestamp"]:
-                m["timestampRange"] = f'{m["timestampStart"]}s-{m["timestamp"]}s'
-            m.pop("timestampStart", None)
+            m["timestamp"] = m["firstSeen"]
+            if m["firstSeen"] != m["lastSeen"]:
+                m["timestampRange"] = "%ss-%ss" % (m["firstSeen"], m["lastSeen"])
 
         logger.info(
             f"视频识别完成: 共处理 {frame_idx} 帧, "

@@ -34,8 +34,8 @@ export function useWebSocket() {
     clearRetryTimer();
     disconnect();
 
-    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws';
-    const ws = new WebSocket(wsUrl);
+    const wsUrl = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+    const ws = new WebSocket(wsUrl.replace(/\/+$/, '') + '/ws');
 
     ws.onopen = () => {
       retryCountRef.current = 0;

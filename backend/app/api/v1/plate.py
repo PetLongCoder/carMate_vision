@@ -13,11 +13,12 @@ import asyncio
 import os
 import time
 import tempfile
+from typing import Optional
 from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Response
 from fastapi.responses import StreamingResponse
 
 from app.services.plate_recognition import (
@@ -158,16 +159,21 @@ async def track_video(file: UploadFile = File(...)):
 async def start_stream_tracking(
     url: str = Form(...),
     name: str = Form(""),
+    push_enabled: bool = Form(False),
+    push_url: str = Form(""),
 ):
     """
     启动流媒体追踪 (POST /api/plate/stream/start)
 
     接收 RTSP/RTMP/HTTP 流地址, 启动后台帧处理任务。
-    配合 WebSocket 实时接收检测结果。
+    可选择将标注后的视频帧推送到指定流媒体地址。
 
     参数:
-      url:  流地址 (例如 rtsp://localhost:8554/camera)
-      name: 可选名称 (例如 "前摄像头")
+      url:          流地址 (例如 rtsp://localhost:8554/camera)
+      name:         可选名称 (例如 "前摄像头")
+      push_enabled: 是否启用推流 (默认 False)
+      push_url:     推流目标地址, 为空时自动生成
+                    (例如 rtsp://localhost:8554/recognized/{sessionId})
 
     返回 sessionId, 用于 WebSocket 连接:
       ws://host/api/ws/plate/track/{sessionId}
@@ -175,6 +181,7 @@ async def start_stream_tracking(
     前置条件:
       - 流媒体服务器 (如 MediaMTX) 已启动并推送流
       - 确保后端能访问该流地址
+      - 启用推流需要安装 FFmpeg 并加入 PATH
     """
     if not url or not url.strip():
         raise HTTPException(status_code=400, detail="流地址不能为空")
@@ -182,23 +189,35 @@ async def start_stream_tracking(
     url = url.strip()
     logger.info(f"收到流追踪请求: {url}")
 
-    # 验证流是否可连接
-    cap = cv2.VideoCapture(url)
-    if not cap.isOpened():
+    # 简单的 URL 格式校验（不实际连接，避免 cv2.VideoCapture 阻塞事件循环）
+    # 实际连接由后台任务 _run_stream_loop 处理，失败时会通过 WebSocket 返回错误
+    if not (url.startswith("rtsp://") or url.startswith("rtmp://") or url.startswith("http")):
         raise HTTPException(
             status_code=400,
-            detail=f"无法连接到流地址: {url}. 请确认流媒体服务器已启动且地址正确。"
+            detail=f"不支持的流地址格式: {url}。请使用 rtsp:// 或 rtmp:// 形式的地址。"
         )
-    cap.release()
 
     # 创建会话
     session = await session_manager.create_session(SessionType.STREAM, url)
 
+    # 确定推流地址
+    resolved_push_url: Optional[str] = None
+    if push_enabled:
+        resolved_push_url = (
+            push_url.strip()
+            if push_url.strip()
+            else f"rtsp://127.0.0.1:8554/recognized/{session.session_id}"
+        )
+        logger.info("推流已启用, 目标地址: %s", resolved_push_url)
+
     # 在后台启动处理任务
     from app.services.video_processor import run_video_session
-    asyncio.create_task(run_video_session(session))
+    asyncio.create_task(run_video_session(session, push_url=resolved_push_url))
 
-    logger.info(f"流追踪会话已创建: {session.session_id}, URL: {url}")
+    logger.info(
+        "流追踪会话已创建: %s, URL: %s, 推流: %s",
+        session.session_id, url, resolved_push_url or "禁用"
+    )
 
     return {
         "code": 200,
@@ -209,6 +228,8 @@ async def start_stream_tracking(
             "url": url,
             "status": SessionStatus.PROCESSING.value,
             "wsEndpoint": f"/api/ws/plate/track/{session.session_id}",
+            "pushEnabled": push_enabled,
+            "pushUrl": resolved_push_url or None,
         },
     }
 
@@ -268,24 +289,39 @@ async def stream_mjpeg(session_id: str):
 
     async def frame_generator():
         boundary = b"--frame\r\n"
+        last_frame = b""
         while True:
-            async with session._frame_cond:
-                await session._frame_cond.wait()
-                if session.latest_frame is not None:
-                    yield boundary
-                    yield b"Content-Type: image/jpeg\r\n"
-                    yield f"Content-Length: {len(session.latest_frame)}\r\n".encode()
-                    yield b"\r\n"
-                    yield session.latest_frame
-                    yield b"\r\n"
-
-            # 会话结束则停止
             if session.status in (SessionStatus.COMPLETED,
                                   SessionStatus.ERROR,
                                   SessionStatus.STOPPED):
                 break
 
+            # 直接读取最新帧，不使用条件变量（避免通知竞争）
+            frame = session.latest_frame if session.latest_frame is not None else last_frame
+            if frame:
+                last_frame = frame if session.latest_frame is not None else last_frame
+                yield boundary
+                yield b"Content-Type: image/jpeg\r\n"
+                yield f"Content-Length: {len(frame)}\r\n".encode()
+                yield b"\r\n"
+                yield frame
+                yield b"\r\n"
+
+            await asyncio.sleep(0.05)  # 20 FPS 硬心跳
+
     return StreamingResponse(
         frame_generator(),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
+
+
+@router.get("/plate/stream/{session_id}/frame")
+async def stream_frame(session_id: str):
+    """获取最新单帧 (备用)"""
+    session = await session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session.latest_frame is None:
+        raise HTTPException(status_code=204, detail="尚无帧数据")
+    return Response(content=session.latest_frame, media_type="image/jpeg",
+                    headers={"Cache-Control": "no-cache"})
