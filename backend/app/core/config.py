@@ -1,7 +1,17 @@
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
 from app.core.network import detect_lan_ip
+
+# 首次运行时自动从 .env.example 创建 .env
+_env_path = Path(__file__).parent.parent.parent / ".env"
+if not _env_path.exists():
+    _example_path = _env_path.with_name(".env.example")
+    if _example_path.exists():
+        import shutil
+        shutil.copyfile(_example_path, _env_path)
+        print(f"[setup] 已从 .env.example 自动创建 .env，请按需修改配置")
 
 load_dotenv()
 

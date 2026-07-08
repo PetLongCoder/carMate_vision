@@ -22,9 +22,9 @@ class HandTracker:
                 num_hands=1
             )
             self.recognizer = vision.GestureRecognizer.create_from_options(options)
-            print("✅ 官方手势模型加载成功！")
+            print("[OK] 官方手势模型加载成功！")
         except Exception as e:
-            print(f"❌ 模型加载失败: {e}")
+            print(f"[ERROR] 模型加载失败: {e}")
             raise
 
         # 动态手势轨迹缓存（保存食指指尖坐标）

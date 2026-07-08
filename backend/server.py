@@ -24,14 +24,19 @@ if LOCAL_PACKAGES_DIR.exists():
 def load_env_file():
     env_path = Path(__file__).parent / ".env"
     if not env_path.exists():
-        return
+        example_path = env_path.with_name(".env.example")
+        if example_path.exists():
+            import shutil as _shutil
+            _shutil.copyfile(example_path, env_path)
+            print(f"[setup] 已从 .env.example 自动创建 .env，请按需修改配置")
 
-    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip("'\""))
+    if env_path.exists():
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip("'\""))
 
 
 load_env_file()
