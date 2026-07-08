@@ -5,7 +5,7 @@ import { AuthError, type AuthErrorCode } from '../utils/authError';
 type ApiErrorBody = ApiResponse<unknown> & { authErrorCode?: AuthErrorCode };
 
 const request = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
