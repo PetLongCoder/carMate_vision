@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Button, Tabs, Segmented, message, Typography } from 'antd';
-import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, MailOutlined } from '@ant-design/icons';
+import { Card, Form, Input, Button, Tabs, Segmented, message, Typography, Divider } from 'antd';
+import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, MailOutlined, WechatOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { login, loginByPhone, loginByEmail, sendSmsCode, sendEmailCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
+import WechatLoginModal from '../components/auth/WechatLoginModal';
 import { emailFormRules } from '../utils/validation';
 import { notifyAuthError } from '../utils/notifyAuthError';
 import type { AuthResponse, UserRole } from '../types';
@@ -20,6 +21,7 @@ const Login: React.FC = () => {
   const [passwordForm] = Form.useForm();
   const [phoneForm] = Form.useForm();
   const [emailForm] = Form.useForm();
+  const [wechatModalOpen, setWechatModalOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const setAuth = useAuthStore((s) => s.setAuth);
@@ -252,12 +254,39 @@ const Login: React.FC = () => {
           </Form>
         )}
 
+        {activeRole === 'user' && import.meta.env.VITE_USE_MOCK_AUTH === 'false' && (
+          <>
+            <Divider plain style={{ margin: '8px 0 16px' }}>
+              其他登录方式
+            </Divider>
+            <Button
+              block
+              size="large"
+              icon={<WechatOutlined />}
+              onClick={() => setWechatModalOpen(true)}
+              style={{
+                color: '#07c160',
+                borderColor: '#07c160',
+                marginBottom: 12,
+              }}
+            >
+              微信扫码登录
+            </Button>
+          </>
+        )}
+
         {activeRole === 'user' && (
           <div style={{ textAlign: 'center', marginTop: 12 }}>
             <Text type="secondary">还没有账号？</Text>{' '}
             <Link to="/register">立即注册</Link>
           </div>
         )}
+
+        <WechatLoginModal
+          open={wechatModalOpen}
+          onClose={() => setWechatModalOpen(false)}
+          onSuccess={finishLogin}
+        />
 
         {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH !== 'false' && (
           <div

@@ -15,6 +15,10 @@ class User(Base):
     phone: Mapped[str | None] = mapped_column(String(11), unique=True)
     email: Mapped[str | None] = mapped_column(String(100), unique=True)
     role: Mapped[str] = mapped_column(String(10), default="user")
+    wechat_openid: Mapped[str | None] = mapped_column(String(64), unique=True)
+    wechat_unionid: Mapped[str | None] = mapped_column(String(64), unique=True)
+    nickname: Mapped[str | None] = mapped_column(String(64))
+    avatar_url: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

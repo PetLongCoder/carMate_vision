@@ -5,20 +5,31 @@ from typing import Any
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 
+from app.core.account_security import ensure_can_remove_method, list_login_methods, can_delete_account
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import create_access_token, decode_access_token, hash_password, verify_password
 from app.models.auth_schemas import (
     AuthResponse,
+    BindEmailRequest,
+    BindPhoneRequest,
+    ChangePasswordRequest,
+    DeleteAccountRequest,
     EmailLoginRequest,
     LoginRequest,
     PhoneLoginRequest,
+    RebindEmailRequest,
+    RebindPhoneRequest,
     RegisterRequest,
+    SecureEmailCodeRequest,
+    SecureSmsCodeRequest,
     SendEmailCodeRequest,
     SendSmsCodeRequest,
+    UnbindCodeRequest,
+    UpdateProfileRequest,
     UserOut,
     VerifySmsCodeRequest,
 )
@@ -49,6 +60,10 @@ def user_to_out(user: User) -> UserOut:
         role=user.role,
         phone=user.phone,
         email=user.email,
+        nickname=user.nickname,
+        avatar_url=user.avatar_url,
+        has_wechat=bool(user.wechat_openid),
+        login_methods=list_login_methods(user),
     )
 
 
@@ -123,6 +138,12 @@ def get_current_user(
     return db.query(User).filter(User.id == int(user_id)).first()
 
 
+def require_current_user(user: User | None = Depends(get_current_user)) -> User:
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    return user
+
+
 def seed_default_users(db: Session) -> None:
     defaults = [
         {
@@ -166,6 +187,12 @@ def send_sms_code(body: SendSmsCodeRequest, db: Session = Depends(get_db)):
     if body.scene == "register" and user:
         return fail("该手机号已注册，请前往登录", auth_error_code="ALREADY_REGISTERED")
 
+    if body.scene == "bind" and user:
+        return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
+    if body.scene == "rebind_new" and user:
+        return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
     code = generate_code()
     save_code(db, f"phone:{body.phone}", body.scene, code)
     logger.info(f"[SMS Code] {body.phone} scene={body.scene} code={code}")
@@ -189,6 +216,12 @@ def send_email_code(body: SendEmailCodeRequest, db: Session = Depends(get_db)):
 
     if body.scene == "register" and user:
         return fail("该邮箱已注册，请前往登录", auth_error_code="ALREADY_REGISTERED")
+
+    if body.scene == "bind" and user:
+        return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
+    if body.scene == "rebind_new" and user:
+        return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
     code = generate_code()
     save_code(db, f"email:{body.email}", body.scene, code)
@@ -271,3 +304,280 @@ def get_me(user: User | None = Depends(get_current_user)):
     if not user:
         return fail("未登录或登录已过期", code=401)
     return ok(user_to_out(user).model_dump())
+
+
+@router.put("/profile")
+def update_profile(
+    body: UpdateProfileRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if body.nickname is not None:
+        user.nickname = body.nickname
+    db.commit()
+    db.refresh(user)
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/bind/phone")
+def bind_phone(
+    body: BindPhoneRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.phone:
+        return fail("您已绑定手机号")
+
+    code_error = verify_code(db, f"phone:{body.phone}", body.code)
+    if code_error:
+        return fail(code_error)
+
+    if db.query(User).filter(User.phone == body.phone, User.id != user.id).first():
+        return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
+    user.phone = body.phone
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 绑定手机号: {body.phone}")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/bind/email")
+def bind_email(
+    body: BindEmailRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if user.email:
+        return fail("您已绑定邮箱")
+
+    code_error = verify_code(db, f"email:{body.email}", body.code)
+    if code_error:
+        return fail(code_error)
+
+    if db.query(User).filter(User.email == body.email, User.id != user.id).first():
+        return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
+    user.email = body.email
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 绑定邮箱: {body.email}")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/account/sms/send")
+def send_secure_sms_code(
+    body: SecureSmsCodeRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if not user.phone:
+        return fail("您尚未绑定手机号")
+
+    if body.scene == "unbind":
+        guard = ensure_can_remove_method(user, "phone")
+        if guard:
+            return fail(guard)
+
+    code = generate_code()
+    save_code(db, f"phone:{user.phone}", body.scene, code)
+    logger.info(f"[SMS Code] {user.phone} scene={body.scene} code={code}")
+    return ok(message="验证码已发送")
+
+
+@router.post("/account/email/send")
+def send_secure_email_code(
+    body: SecureEmailCodeRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if not user.email:
+        return fail("您尚未绑定邮箱")
+
+    if body.scene == "unbind":
+        guard = ensure_can_remove_method(user, "email")
+        if guard:
+            return fail(guard)
+
+    code = generate_code()
+    save_code(db, f"email:{user.email}", body.scene, code)
+    logger.info(f"[Email Code] {user.email} scene={body.scene} code={code}")
+    return ok(message="验证码已发送")
+
+
+@router.post("/unbind/phone")
+def unbind_phone(
+    body: UnbindCodeRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    guard = ensure_can_remove_method(user, "phone")
+    if guard:
+        return fail(guard)
+
+    code_error = verify_code(db, f"phone:{user.phone}", body.code)
+    if code_error:
+        return fail(code_error)
+
+    user.phone = None
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 解绑手机号")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/unbind/email")
+def unbind_email(
+    body: UnbindCodeRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    guard = ensure_can_remove_method(user, "email")
+    if guard:
+        return fail(guard)
+
+    code_error = verify_code(db, f"email:{user.email}", body.code)
+    if code_error:
+        return fail(code_error)
+
+    user.email = None
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 解绑邮箱")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/rebind/phone")
+def rebind_phone(
+    body: RebindPhoneRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if not user.phone:
+        return fail("您尚未绑定手机号，请使用绑定功能")
+
+    code_error = verify_code(db, f"phone:{user.phone}", body.old_code)
+    if code_error:
+        return fail(f"原手机号验证失败：{code_error}")
+
+    new_code_error = verify_code(db, f"phone:{body.new_phone}", body.new_code)
+    if new_code_error:
+        return fail(f"新手机号验证失败：{new_code_error}")
+
+    if db.query(User).filter(User.phone == body.new_phone, User.id != user.id).first():
+        return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
+    user.phone = body.new_phone
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 换绑手机号: {body.new_phone}")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/rebind/email")
+def rebind_email(
+    body: RebindEmailRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    if not user.email:
+        return fail("您尚未绑定邮箱，请使用绑定功能")
+
+    code_error = verify_code(db, f"email:{user.email}", body.old_code)
+    if code_error:
+        return fail(f"原邮箱验证失败：{code_error}")
+
+    new_code_error = verify_code(db, f"email:{body.new_email}", body.new_code)
+    if new_code_error:
+        return fail(f"新邮箱验证失败：{new_code_error}")
+
+    if db.query(User).filter(User.email == body.new_email, User.id != user.id).first():
+        return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
+
+    user.email = body.new_email
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 换绑邮箱: {body.new_email}")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/account/change-password")
+def change_password(
+    body: ChangePasswordRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    methods = list_login_methods(user)
+
+    if body.verify_method == "password":
+        if "password" not in methods:
+            return fail("当前账号不支持密码验证")
+        if not body.old_password or not verify_password(body.old_password, user.password_hash):
+            return fail("原密码错误")
+    elif body.verify_method == "phone":
+        if not user.phone:
+            return fail("您尚未绑定手机号")
+        if not body.code:
+            return fail("请输入验证码")
+        code_error = verify_code(db, f"phone:{user.phone}", body.code)
+        if code_error:
+            return fail(code_error)
+    elif body.verify_method == "email":
+        if not user.email:
+            return fail("您尚未绑定邮箱")
+        if not body.code:
+            return fail("请输入验证码")
+        code_error = verify_code(db, f"email:{user.email}", body.code)
+        if code_error:
+            return fail(code_error)
+    else:
+        return fail("不支持的验证方式")
+
+    user.password_hash = hash_password(body.new_password)
+    db.commit()
+    db.refresh(user)
+    logger.info(f"用户 {user.username} 修改密码")
+    return ok(user_to_out(user).model_dump())
+
+
+@router.post("/account/delete")
+def delete_account(
+    body: DeleteAccountRequest,
+    user: User = Depends(require_current_user),
+    db: Session = Depends(get_db),
+):
+    guard = can_delete_account(user)
+    if guard:
+        return fail(guard)
+
+    methods = list_login_methods(user)
+
+    if body.verify_method == "password":
+        if "password" not in methods:
+            return fail("当前账号不支持密码验证")
+        if not body.password or not verify_password(body.password, user.password_hash):
+            return fail("密码验证失败")
+    elif body.verify_method == "phone":
+        if not user.phone:
+            return fail("您尚未绑定手机号")
+        if not body.code:
+            return fail("请输入验证码")
+        code_error = verify_code(db, f"phone:{user.phone}", body.code)
+        if code_error:
+            return fail(code_error)
+    elif body.verify_method == "email":
+        if not user.email:
+            return fail("您尚未绑定邮箱")
+        if not body.code:
+            return fail("请输入验证码")
+        code_error = verify_code(db, f"email:{user.email}", body.code)
+        if code_error:
+            return fail(code_error)
+    else:
+        return fail("不支持的验证方式")
+
+    username = user.username
+    db.delete(user)
+    db.commit()
+    logger.info(f"用户注销账号: {username}")
+    return ok(message="账号已注销")

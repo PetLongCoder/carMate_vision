@@ -12,6 +12,7 @@ import PoliceGesture from './pages/PoliceGesture';
 import DriverGesture from './pages/DriverGesture';
 import AlertCenter from './pages/AlertCenter';
 import History from './pages/History';
+import Profile from './pages/Profile';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -43,6 +44,7 @@ const AuthenticatedApp: React.FC = () => {
           <Route path="/police-gesture" element={<PoliceGesture />} />
           <Route path="/driver-gesture" element={<DriverGesture />} />
           <Route path="/history" element={<History />} />
+          <Route path="/profile" element={<Profile />} />
           <Route element={<RoleGuard allowedRoles={['admin']} />}>
             <Route path="/alerts" element={<AlertCenter />} />
           </Route>

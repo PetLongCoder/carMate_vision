@@ -23,6 +23,7 @@ from app.api.v1 import (
     alerts,
     history,
     stats,
+    wechat,
 )
 from app.core.database import SessionLocal, init_db
 from app.api.v1.auth import seed_default_users
@@ -44,7 +45,11 @@ async def lifespan(app: FastAPI):
     # 初始化数据库
     try:
         init_db()
-        seed_default_users()
+        db = SessionLocal()
+        try:
+            seed_default_users(db)
+        finally:
+            db.close()
         logger.info("数据库初始化完成")
     except Exception as e:
         logger.warning(f"数据库初始化跳过: {e}")
@@ -72,6 +77,7 @@ app.add_middleware(
 
 # 注册所有路由 (统一前缀 /api)
 app.include_router(auth.router, prefix="/api", tags=["用户认证"])
+app.include_router(wechat.router, prefix="/api", tags=["微信登录(Mock)"])
 app.include_router(driver_gesture.router, prefix="/api", tags=["车主手势控车"])
 app.include_router(plate.router, prefix="/api", tags=["车牌识别"])
 app.include_router(police_gesture.router, prefix="/api", tags=["交警手势识别"])
@@ -246,3 +252,22 @@ async def _cleanup_loop():
                         await session_manager.remove_session(s["sessionId"])
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════
+#  直接运行入口
+# ═══════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    port = int(os.getenv("CARMATE_MAIN_PORT", "8001"))
+    print("=" * 60)
+    print("CarMate 主 API 服务")
+    print("=" * 60)
+    print(f"端口: {port}")
+    print(f"API 文档: http://localhost:{port}/docs")
+    print(f"健康检查: http://localhost:{port}/api/health")
+    print("=" * 60)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")

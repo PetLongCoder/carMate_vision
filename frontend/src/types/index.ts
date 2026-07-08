@@ -216,6 +216,10 @@ export interface User {
   email?: string;
   phone?: string;
   role: UserRole;
+  nickname?: string;
+  avatar_url?: string;
+  has_wechat?: boolean;
+  login_methods?: string[];
 }
 
 export interface LoginRequest {
@@ -233,7 +237,9 @@ export interface EmailLoginRequest {
   code: string;
 }
 
-export type CodeScene = 'login' | 'register';
+export type CodeScene = 'login' | 'register' | 'bind' | 'rebind_new';
+export type SecureCodeScene = 'unbind' | 'rebind_old' | 'delete' | 'change_password';
+export type VerifyMethod = 'password' | 'phone' | 'email';
 
 export interface SendSmsCodeRequest {
   phone: string;
@@ -261,4 +267,70 @@ export interface RegisterRequest {
 export interface AuthResponse {
   token: string;
   user: User;
+}
+
+export interface UpdateProfileRequest {
+  nickname?: string;
+}
+
+export interface BindPhoneRequest {
+  phone: string;
+  code: string;
+}
+
+export interface BindEmailRequest {
+  email: string;
+  code: string;
+}
+
+export interface UnbindCodeRequest {
+  code: string;
+}
+
+export interface RebindPhoneRequest {
+  old_code: string;
+  new_phone: string;
+  new_code: string;
+}
+
+export interface RebindEmailRequest {
+  old_code: string;
+  new_email: string;
+  new_code: string;
+}
+
+export interface DeleteAccountRequest {
+  verify_method: VerifyMethod;
+  password?: string;
+  code?: string;
+}
+
+export interface ChangePasswordRequest {
+  verify_method: VerifyMethod;
+  old_password?: string;
+  code?: string;
+  new_password: string;
+}
+
+export interface WechatQrcodeResponse {
+  state: string;
+  confirm_url: string;
+  qrcode_base64: string;
+  expires_in: number;
+  lan_ip: string;
+  network_hint: string;
+  step?: number;
+}
+
+export type WechatPollStatus = 'waiting' | 'confirmed' | 'expired' | 'step1_done';
+
+export interface WechatPollResponse {
+  status: WechatPollStatus;
+  auth?: AuthResponse;
+}
+
+export interface WechatBindPollResponse {
+  status: WechatPollStatus;
+  user?: User;
+  step?: number;
 }

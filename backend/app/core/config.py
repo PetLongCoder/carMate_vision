@@ -1,6 +1,8 @@
 import os
 from dotenv import load_dotenv
 
+from app.core.network import detect_lan_ip
+
 load_dotenv()
 
 
@@ -16,6 +18,17 @@ class Settings:
     JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
     CODE_TTL_SECONDS: int = int(os.getenv("CODE_TTL_SECONDS", "300"))
+
+    WECHAT_MOCK_ENABLED: bool = os.getenv("WECHAT_MOCK_ENABLED", "true").lower() == "true"
+    WECHAT_SESSION_TTL_SECONDS: int = int(os.getenv("WECHAT_SESSION_TTL_SECONDS", "300"))
+    WECHAT_CONFIRM_BASE_URL: str = os.getenv("WECHAT_CONFIRM_BASE_URL", "")
+    API_PORT: int = int(os.getenv("API_PORT", "8000"))
+
+    @property
+    def wechat_confirm_base_url(self) -> str:
+        if self.WECHAT_CONFIRM_BASE_URL:
+            return self.WECHAT_CONFIRM_BASE_URL.rstrip("/")
+        return f"http://{detect_lan_ip()}:{self.API_PORT}"
 
     @property
     def database_url(self) -> str:
