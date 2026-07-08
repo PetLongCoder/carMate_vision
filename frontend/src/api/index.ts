@@ -39,12 +39,10 @@ export function uploadTrackVideo(file: File) {
 }
 
 /** 启动流媒体追踪会话 */
-export function startStreamTracking(url: string, name?: string, pushEnabled?: boolean, pushUrl?: string) {
+export function startStreamTracking(url: string, name?: string) {
   const formData = new FormData();
   formData.append('url', url);
   if (name) formData.append('name', name);
-  if (pushEnabled !== undefined) formData.append('push_enabled', String(pushEnabled));
-  if (pushUrl) formData.append('push_url', pushUrl);
   return request.post<ApiResponse<StreamStartResponse>>('/plate/stream/start', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 20000, // 20s — RTSP 连接可能需要时间

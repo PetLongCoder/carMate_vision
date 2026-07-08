@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Card, Upload, Button, Space, Tag, Table, message, Tabs, Input,
-  Progress, Badge, Typography, Alert, Spin, Switch,
+  Progress, Badge, Typography, Alert, Spin,
 } from 'antd';
 import {
   CameraOutlined, InboxOutlined, PlayCircleOutlined,
   StopOutlined, LinkOutlined, VideoCameraOutlined,
   CheckCircleOutlined, CloseCircleOutlined,
-  LoadingOutlined, ExportOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
 import { PageHeader, Empty } from '../components/common';
 import {
@@ -213,10 +213,6 @@ const PlateRecognition: React.FC = () => {
   // ── Stream 模式状态 ──
   const [streamUrl, setStreamUrl] = useState('');
   const [streamName, setStreamName] = useState('');
-  const [streamPushEnabled, setStreamPushEnabled] = useState(false);
-  const [streamPushUrl, setStreamPushUrl] = useState('');
-  const [streamPushActive, setStreamPushActive] = useState(false);
-  const [streamPushAddress, setStreamPushAddress] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [streamImgSrc, setStreamImgSrc] = useState<string | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
@@ -657,8 +653,6 @@ const PlateRecognition: React.FC = () => {
     setStreamRunning(true);
     setStreamPlateSummary([]);
     setStreamDetections([]);
-    setStreamPushActive(false);
-    setStreamPushAddress(null);
     lastValidStreamRef.current = [];
     setTrackProgress(0);
     setStreamImgSrc(null);
@@ -667,14 +661,10 @@ const PlateRecognition: React.FC = () => {
       const res = await startStreamTracking(
         streamUrl.trim(),
         streamName.trim() || undefined,
-        streamPushEnabled || undefined,
-        streamPushUrl.trim() || undefined,
       );
       if (res.data.code === 200) {
-        const { sessionId, pushEnabled, pushUrl } = res.data.data;
+        const { sessionId } = res.data.data;
         setStreamSessionId(sessionId);
-        setStreamPushActive(!!pushEnabled);
-        setStreamPushAddress(pushUrl || null);
         setConnecting(false);
         connectStreamWs(sessionId);
       } else {
@@ -1095,20 +1085,9 @@ const PlateRecognition: React.FC = () => {
             {connecting ? '连接中...' : streamRunning ? '停止' : '启动识别'}
           </Button>
         </div>
+	      </Card>
 
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
-          <Switch
-            checked={streamPushEnabled}
-            onChange={setStreamPushEnabled}
-            disabled={streamRunning || connecting}
-            checkedChildren="推流开"
-            unCheckedChildren="推流关"
-          />
-          <Text type="secondary">将识别画面推送到 MediaMTX（HLS/WebRTC 查看）</Text>
-        </div>
-      </Card>
-
-      {/* 运行状态 */}
+	      {/* 运行状态 */}
       {streamRunning && (
         <Card size="small" style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -1122,15 +1101,6 @@ const PlateRecognition: React.FC = () => {
               <Badge status="success" text={<Text style={{ fontSize: 13 }}>已连接</Text>} />
             </Space>
           </div>
-          {streamPushActive && streamPushAddress && (
-            <div style={{ marginTop: 8, padding: '8px 12px', background: '#f6ffed', borderRadius: 6, fontSize: 13 }}>
-              <Tag color="success" icon={<ExportOutlined />}>推流中</Tag>
-              <Text code>{streamPushAddress}</Text>
-              <Text type="secondary" style={{ marginLeft: 12 }}>
-                HLS: <Text code>http://localhost:8888/recognized/{streamSessionId}/index.m3u8</Text>
-              </Text>
-            </div>
-          )}
         </Card>
       )}
 
@@ -1225,7 +1195,6 @@ const PlateRecognition: React.FC = () => {
                 <li>在上方输入摄像头 RTSP 流地址（沙盘: <Text code>rtsp://10.126.59.120:8554/live/live1</Text> ~ live12）</li>
                 <li>若需要本地测试：<Text code>ffmpeg -re -i test.mp4 -f rtsp rtsp://localhost:8554/camera</Text></li>
                 <li>点击 <Tag color="blue">启动识别</Tag>，实时画面将显示检测框和车牌号</li>
-                <li>开启推流后可在浏览器查看 HLS/WebRTC 识别画面</li>
               </ol>
             }
           />

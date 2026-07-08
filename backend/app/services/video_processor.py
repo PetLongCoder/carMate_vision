@@ -16,13 +16,11 @@ from app.services.session_manager import (
     SessionType,
     session_manager,
 )
-from app.services.stream_pusher import FFmpegPusher, create_pusher
 from app.utils.logger import logger
 
 
 async def run_video_session(
     session: TrackingSession,
-    push_url: Optional[str] = None,
 ):
     cap: Optional[cv2.VideoCapture] = None
 
@@ -30,7 +28,7 @@ async def run_video_session(
         session.update_status(SessionStatus.PROCESSING)
 
         if session.type == SessionType.STREAM:
-            await _run_stream_loop(session, push_url=push_url)
+            await _run_stream_loop(session)
         else:
             processor = VideoStreamProcessor(process_every_n_frames=1)
             session.processor = processor
@@ -103,7 +101,6 @@ async def _run_detection(
 
 async def _run_stream_loop(
     session: TrackingSession,
-    push_url: Optional[str] = None,
 ):
     """
     流媒体循环 — 读帧与检测完全分离
@@ -118,8 +115,6 @@ async def _run_stream_loop(
     frame_idx = 0
     detect_interval = 6  # 每 6 帧检测一次
     fps = 25.0
-    push_enabled = False
-    pusher = None
 
     # 打开 VideoCapture
     cap = await _open_capture(session.source)
@@ -134,10 +129,6 @@ async def _run_stream_loop(
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
     logger.info("流 %s 已连接: %dx%d @ %.1f fps", session.session_id, width, height, fps)
-
-    if push_url:
-        pusher = create_pusher(dst_url=push_url, width=width, height=height, fps=min(int(fps), 30))
-        push_enabled = pusher is not None
 
     while True:
         try:
@@ -170,11 +161,6 @@ async def _run_stream_loop(
         ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 75])
         if ok:
             await session.set_frame(jpeg.tobytes())
-
-        # 推流（推原始帧）
-        if push_enabled:
-            if not pusher.write_frame(frame):
-                push_enabled = False
 
         frame_idx += 1
         if frame_idx % 50 == 0:
