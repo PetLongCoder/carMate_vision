@@ -252,3 +252,22 @@ async def _cleanup_loop():
                         await session_manager.remove_session(s["sessionId"])
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════
+#  直接运行入口
+# ═══════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+
+    port = int(os.getenv("CARMATE_MAIN_PORT", "8001"))
+    print("=" * 60)
+    print("CarMate 主 API 服务")
+    print("=" * 60)
+    print(f"端口: {port}")
+    print(f"API 文档: http://localhost:{port}/docs")
+    print(f"健康检查: http://localhost:{port}/api/health")
+    print("=" * 60)
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
