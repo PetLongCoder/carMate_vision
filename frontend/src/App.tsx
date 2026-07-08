@@ -7,7 +7,6 @@ import AuthGuard from './components/auth/AuthGuard';
 import RoleGuard from './components/auth/RoleGuard';
 import Dashboard from './pages/Dashboard';
 import PlateRecognition from './pages/PlateRecognition';
-import PlateStream from './pages/PlateStream';
 import PoliceGesture from './pages/PoliceGesture';
 import DriverGesture from './pages/DriverGesture';
 import AlertCenter from './pages/AlertCenter';
@@ -29,7 +28,7 @@ const theme = {
 
 const HomePage: React.FC = () => {
   const isAdmin = useAuthStore((s) => s.isAdmin());
-  return isAdmin ? <Navigate to="/stream" replace /> : <Navigate to="/stream" replace />;
+  return <Navigate to="/plate" replace />;
 };
 
 const AuthenticatedApp: React.FC = () => {
@@ -40,7 +39,6 @@ const AuthenticatedApp: React.FC = () => {
         <Route element={<AppLayout />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/plate" element={<PlateRecognition />} />
-          <Route path="/stream" element={<PlateStream />} />
           <Route path="/police-gesture" element={<PoliceGesture />} />
           <Route path="/driver-gesture" element={<DriverGesture />} />
           <Route path="/history" element={<History />} />

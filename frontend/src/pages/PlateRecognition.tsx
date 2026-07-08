@@ -218,6 +218,7 @@ const PlateRecognition: React.FC = () => {
   const [streamPushUrl, setStreamPushUrl] = useState('');
   const [streamPushActive, setStreamPushActive] = useState(false);
   const [streamPushAddress, setStreamPushAddress] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
   const [streamImgSrc, setStreamImgSrc] = useState<string | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
   const [streamRunning, setStreamRunning] = useState(false);
@@ -660,6 +661,7 @@ const PlateRecognition: React.FC = () => {
       return;
     }
 
+    setConnecting(true);
     setStreamRunning(true);
     setStreamPlateSummary([]);
     setStreamDetections([]);
@@ -681,14 +683,17 @@ const PlateRecognition: React.FC = () => {
         setStreamSessionId(sessionId);
         setStreamPushActive(!!pushEnabled);
         setStreamPushAddress(pushUrl || null);
+        setConnecting(false);
         connectStreamWs(sessionId);
       } else {
         message.error(res.data.message || '启动失败');
         setStreamRunning(false);
+        setConnecting(false);
       }
     } catch {
       message.error('无法连接到后端服务');
       setStreamRunning(false);
+      setConnecting(false);
     }
   };
 
@@ -1056,27 +1061,27 @@ const PlateRecognition: React.FC = () => {
 
   const streamTab = (
     <div>
-      <Card style={{ marginBottom: 24 }}>
+      <Card style={{ marginBottom: 20 }}>
         <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: 250 }}>
-            <Text strong>流媒体地址</Text>
+          <div style={{ flex: 1, minWidth: 280 }}>
+            <Text strong style={{ fontSize: 15 }}>摄像头流地址</Text>
             <Input
-              placeholder="rtsp://localhost:8554/camera  或   rtmp://..."
+              placeholder="rtsp://10.126.59.120:8554/live/live1"
               prefix={<LinkOutlined />}
               value={streamUrl}
-              onChange={(e) => setStreamUrl(e.target.value)}
+              onChange={e => setStreamUrl(e.target.value)}
               size="large"
-              disabled={streamRunning}
+              disabled={streamRunning || connecting}
             />
           </div>
-          <div style={{ minWidth: 150 }}>
-            <Text strong>名称 (可选)</Text>
+          <div style={{ minWidth: 140 }}>
+            <Text strong style={{ fontSize: 15 }}>名称（可选）</Text>
             <Input
-              placeholder="前摄像头"
+              placeholder="桥面摄像头"
               value={streamName}
-              onChange={(e) => setStreamName(e.target.value)}
+              onChange={e => setStreamName(e.target.value)}
               size="large"
-              disabled={streamRunning}
+              disabled={streamRunning || connecting}
             />
           </div>
           <Button
@@ -1085,182 +1090,151 @@ const PlateRecognition: React.FC = () => {
             size="large"
             onClick={streamRunning ? handleStreamStop : handleStreamStart}
             danger={streamRunning}
+            loading={connecting}
+            style={{ minWidth: 130, height: 40 }}
           >
-            {streamRunning ? '停止追踪' : '启动追踪'}
+            {connecting ? '连接中...' : streamRunning ? '停止' : '启动识别'}
           </Button>
         </div>
 
-        {/* 推流配置 */}
-        <div style={{ marginTop: 12, padding: '12px 16px', background: '#fafafa', borderRadius: 8, border: '1px solid #f0f0f0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: streamPushEnabled ? 12 : 0 }}>
-            <Switch
-              checked={streamPushEnabled}
-              onChange={setStreamPushEnabled}
-              disabled={streamRunning}
-              checkedChildren="推流已开启"
-              unCheckedChildren="推流已关闭"
-            />
-            <Text type="secondary">将识别后的画面推送到流媒体服务器, 可通过 HLS/WebRTC 查看</Text>
-          </div>
-          {streamPushEnabled && (
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Input
-                placeholder="推流地址 (留空自动生成: rtsp://localhost:8554/recognized/{sessionId})"
-                prefix={<ExportOutlined />}
-                value={streamPushUrl}
-                onChange={(e) => setStreamPushUrl(e.target.value)}
-                size="small"
-                disabled={streamRunning}
-                style={{ flex: 1 }}
-              />
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginTop: 16 }}>
-          <Alert
-            type="info"
-            message="需要配合 MediaMTX + FFmpeg 使用"
-            description={
-              <ol style={{ margin: '4px 0', paddingLeft: 20 }}>
-                <li>启动 MediaMTX 流媒体服务器 (运行 mediamtx.exe)</li>
-                <li>使用 FFmpeg 推送摄像头流: <Text code>ffmpeg -f dshow -i video="摄像头" -f rtsp rtsp://localhost:8554/camera</Text></li>
-                <li>在上方输入流地址, 点击"启动追踪"</li>
-                <li>开启推流后可通过 HLS/WebRTC 查看识别画面</li>
-              </ol>
-            }
-            showIcon
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <Switch
+            checked={streamPushEnabled}
+            onChange={setStreamPushEnabled}
+            disabled={streamRunning || connecting}
+            checkedChildren="推流开"
+            unCheckedChildren="推流关"
           />
+          <Text type="secondary">将识别画面推送到 MediaMTX（HLS/WebRTC 查看）</Text>
         </div>
       </Card>
 
-      {/* 连接状态 + 进度 + 推流信息 */}
-      {streamSessionId && wsStatus === 'connected' && (
-        <Card size="small" style={{ marginBottom: 16 }}>
+      {/* 运行状态 */}
+      {streamRunning && (
+        <Card size="small" style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
             <Space>
-              <Text strong>会话:</Text>
-              <Text code>{streamSessionId}</Text>
+              <Badge status="processing" color="green" />
+              <Text strong>实时追踪中</Text>
+              <Text code style={{ fontSize: 12 }}>{streamSessionId}</Text>
             </Space>
-            <Space>
-              <Text>状态:</Text>
-              {renderWsBadge()}
-              <Text type="secondary">已处理 {trackProcessedFrames} 帧</Text>
+            <Space size={16}>
+              <Text type="secondary">已处理 <Text strong>{trackProcessedFrames}</Text> 帧</Text>
+              <Badge status="success" text={<Text style={{ fontSize: 13 }}>已连接</Text>} />
             </Space>
           </div>
-          {/* 推流访问信息 */}
           {streamPushActive && streamPushAddress && (
-            <div style={{ marginTop: 10, padding: '8px 12px', background: '#f6ffed', borderRadius: 6, border: '1px solid #b7eb8f' }}>
-              <Space direction="vertical" style={{ width: '100%' }} size={4}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Tag color="success" icon={<ExportOutlined />}>推流中</Tag>
-                  <Text strong style={{ fontSize: 13 }}>识别画面推送地址:</Text>
-                </div>
-                <div>
-                  <Text code style={{ fontSize: 12 }}>{streamPushAddress}</Text>
-                </div>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  📺 HLS 播放: <Text code>{`http://localhost:8888/recognized/${streamSessionId}/index.m3u8`}</Text>
-                  {' | '}
-                  WebRTC: <Text code>{`http://localhost:8889/recognized/${streamSessionId}`}</Text>
-                </Text>
-              </Space>
+            <div style={{ marginTop: 8, padding: '8px 12px', background: '#f6ffed', borderRadius: 6, fontSize: 13 }}>
+              <Tag color="success" icon={<ExportOutlined />}>推流中</Tag>
+              <Text code>{streamPushAddress}</Text>
+              <Text type="secondary" style={{ marginLeft: 12 }}>
+                HLS: <Text code>http://localhost:8888/recognized/{streamSessionId}/index.m3u8</Text>
+              </Text>
             </div>
           )}
         </Card>
       )}
 
-      {/* 实时视频 + 检测面板 */}
-      {wsStatus === 'connected' && streamSessionId && (
-        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-          {/* 视频播放区: MJPEG 流 + Canvas 覆盖层 */}
-          <Card
-            title="实时视频"
-            style={{ flex: '1 1 500px' }}
-            extra={
-              <Badge status="processing" text={`已处理 ${trackProcessedFrames} 帧`} />
-            }
-          >
-            <div style={{ position: 'relative' }}>
+      {/* 视频 + 结果 */}
+      <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
+        <Card
+          title="实时视频"
+          style={{ flex: '1 1 600px' }}
+          extra={streamRunning ? <Badge status="processing" text={`${trackProcessedFrames} 帧`} /> : null}
+        >
+          {streamRunning && streamSessionId ? (
+            <div style={{ position: 'relative', background: '#000', borderRadius: 8, minHeight: 300 }}>
               <img
                 ref={streamImgRef}
-                src={`/api/plate/stream/${streamSessionId}/mjpeg${''}`}
-                alt="实时流"
-                style={{ maxWidth: '100%', maxHeight: 450, borderRadius: 8, display: 'block' }}
-                onLoad={() => {
-                  // 确保 canvas 尺寸同步
-                  if (streamCanvasRef.current && streamImgRef.current) {
-                    const rect = streamImgRef.current.getBoundingClientRect();
-                    const dpr = window.devicePixelRatio || 1;
-                    streamCanvasRef.current.width = rect.width * dpr;
-                    streamCanvasRef.current.height = rect.height * dpr;
-                    streamCanvasRef.current.style.width = `${rect.width}px`;
-                    streamCanvasRef.current.style.height = `${rect.height}px`;
-                  }
-                }}
+                src={`/api/plate/stream/${streamSessionId}/mjpeg`}
+                alt="stream"
+                style={{ maxWidth: '100%', maxHeight: 500, borderRadius: 8, display: 'block' }}
               />
               <canvas
                 ref={streamCanvasRef}
-                style={{
-                  position: 'absolute', top: 0, left: 0,
-                  width: '100%', height: '100%',
-                  pointerEvents: 'none', borderRadius: 8,
-                }}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', borderRadius: 8 }}
               />
             </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '80px 0', color: '#999' }}>
+              <LinkOutlined style={{ fontSize: 48, marginBottom: 16 }} />
+              <div>输入流地址并启动识别</div>
+            </div>
+          )}
+        </Card>
+
+        {/* 检测结果面板 */}
+        <div style={{ flex: '1 1 300px', minWidth: 280 }}>
+          <Card title={`当前检测 (${streamDetections.length} 个)`}>
+            {streamDetections.length > 0 ? (
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {streamDetections.map(d => (
+                  <div key={d.trackId} style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '8px 12px', background: '#f6f8fa', borderRadius: 6,
+                    borderLeft: `4px solid ${getColorForPlate(d.color)}`,
+                  }}>
+                    <Space>
+                      <Text strong style={{ fontSize: 16 }}>{d.plateNo}</Text>
+                      <Tag color={PLATE_COLOR_MAP[d.color]?.color || 'blue'}>
+                        {PLATE_COLOR_MAP[d.color]?.label || d.color}牌
+                      </Tag>
+                      <Text type="secondary">{VEHICLE_TYPE_MAP[d.vehicleType]?.icon} {d.vehicleType}</Text>
+                    </Space>
+                    <Text type="secondary">{(d.confidence * 100).toFixed(0)}%</Text>
+                  </div>
+                ))}
+              </Space>
+            ) : (
+              <div style={{ textAlign: 'center', padding: 40 }}>
+                {streamRunning ? (
+                  <><Spin indicator={<LoadingOutlined style={{ fontSize: 24 }} />} /><div style={{ marginTop: 12 }}>等待检测结果...</div></>
+                ) : (
+                  <Text type="secondary">暂无数据</Text>
+                )}
+              </div>
+            )}
           </Card>
 
-          {/* 检测结果面板 */}
-          <div style={{ flex: '1 1 350px', minWidth: 300 }}>
-            <Card title={`实时检测 (${streamDetections.length} 个)`}>
-              {streamDetections.length > 0 ? (
-                <Space direction="vertical" style={{ width: '100%' }}>
-                  {streamDetections.map((d) => (
-                    <div
-                      key={d.trackId}
-                      style={{
-                        display: 'flex', justifyContent: 'space-between',
-                        alignItems: 'center', padding: '8px 12px',
-                        background: '#f6f8fa', borderRadius: 6,
-                        border: `2px solid ${getColorForPlate(d.color)}`,
-                      }}
-                    >
-                      <Space>
-                        <Text strong style={{ fontSize: 16 }}>{d.plateNo}</Text>
-                        <Tag color={PLATE_COLOR_MAP[d.color]?.color}>
-                          {PLATE_COLOR_MAP[d.color]?.label || d.color}
-                        </Tag>
-                      </Space>
-                      <Text type="secondary">{(d.confidence * 100).toFixed(0)}%  {VEHICLE_TYPE_MAP[d.vehicleType]?.icon}</Text>
-                    </div>
-                  ))}
-                </Space>
-              ) : (
-                <div style={{ textAlign: 'center', padding: 40 }}>
-                  <Spin indicator={<LoadingOutlined style={{ fontSize: 32 }} />} />
-                  <div style={{ marginTop: 16 }}><Text type="secondary">等待流数据...</Text></div>
-                </div>
-              )}
+          {/* 汇总 */}
+          {streamPlateSummary.length > 0 && (
+            <Card title={`识别汇总 (${streamPlateSummary.length} 个车牌)`} style={{ marginTop: 16 }}>
+              <Space direction="vertical" style={{ width: '100%' }}>
+                {streamPlateSummary.map(p => (
+                  <div key={p.trackId} style={{
+                    display: 'flex', justifyContent: 'space-between',
+                    padding: '6px 8px', background: '#fafafa', borderRadius: 4,
+                  }}>
+                    <Space>
+                      <Text strong>{p.plateNo}</Text>
+                      <Tag color="blue">{p.color}牌</Tag>
+                    </Space>
+                    <Text type="secondary">{(p.confidence * 100).toFixed(0)}% · {p.appearances}次</Text>
+                  </div>
+                ))}
+              </Space>
             </Card>
-
-            {/* 汇总 */}
-            {streamPlateSummary.length > 0 && (
-              <Card title={`追踪汇总 (${streamPlateSummary.length} 个车牌)`} style={{ marginTop: 16 }}>
-                <Table
-                  columns={trackColumns}
-                  dataSource={streamPlateSummary}
-                  rowKey="trackId"
-                  pagination={false}
-                  size="small"
-                />
-              </Card>
-            )}
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
-      {wsStatus === 'disconnected' && !streamRunning && (
-        <Card><Empty description="输入流地址并启动追踪, 实时检测车牌" icon={<LinkOutlined />} /></Card>
+      {!streamRunning && !connecting && (
+        <Card style={{ marginTop: 20 }}>
+          <Alert
+            type="info"
+            showIcon
+            message="使用说明"
+            description={
+              <ol style={{ margin: 0, paddingLeft: 20, lineHeight: 2 }}>
+                <li>确保 <Text code>mediamtx.exe</Text> 和 FFmpeg 已启动</li>
+                <li>在上方输入摄像头 RTSP 流地址（沙盘: <Text code>rtsp://10.126.59.120:8554/live/live1</Text> ~ live12）</li>
+                <li>若需要本地测试：<Text code>ffmpeg -re -i test.mp4 -f rtsp rtsp://localhost:8554/camera</Text></li>
+                <li>点击 <Tag color="blue">启动识别</Tag>，实时画面将显示检测框和车牌号</li>
+                <li>开启推流后可在浏览器查看 HLS/WebRTC 识别画面</li>
+              </ol>
+            }
+          />
+        </Card>
       )}
     </div>
   );
@@ -1287,7 +1261,7 @@ const PlateRecognition: React.FC = () => {
     },
     {
       key: 'stream',
-      label: <span><LinkOutlined /> 流媒体输入</span>,
+      label: <span><VideoCameraOutlined /> 实时流识别</span>,
       children: streamTab,
     },
   ];

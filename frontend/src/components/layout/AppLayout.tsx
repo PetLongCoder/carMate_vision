@@ -4,7 +4,6 @@ import type { MenuProps } from 'antd';
 import {
   CarOutlined,
   CameraOutlined,
-  VideoCameraOutlined,
   HighlightOutlined,
   AimOutlined,
   AlertOutlined,
@@ -31,7 +30,6 @@ const allMenuItems: Array<{
 }> = [
   { key: '/', icon: <CarOutlined />, label: '控制面板', roles: ['admin'] },
   { key: '/plate', icon: <CameraOutlined />, label: '车牌识别', roles: ['user', 'admin'] },
-  { key: '/stream', icon: <VideoCameraOutlined />, label: '实时流识别', roles: ['user', 'admin'] },
   { key: '/police-gesture', icon: <HighlightOutlined />, label: '交警手势', roles: ['user', 'admin'] },
   { key: '/driver-gesture', icon: <AimOutlined />, label: '车主手势', roles: ['user', 'admin'] },
   { key: '/alerts', icon: <AlertOutlined />, label: '告警中心', roles: ['admin'] },
