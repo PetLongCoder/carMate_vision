@@ -1,13 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Card, Upload, Button, Space, Tag, Table, message, Tabs, Input,
-  Progress, Badge, Typography, Alert, Spin,
+  Progress, Badge, Typography, Alert, Spin, Switch,
 } from 'antd';
 import {
   CameraOutlined, InboxOutlined, PlayCircleOutlined,
   StopOutlined, LinkOutlined, VideoCameraOutlined,
   CheckCircleOutlined, CloseCircleOutlined,
-  LoadingOutlined,
+  LoadingOutlined, ExportOutlined,
 } from '@ant-design/icons';
 import { PageHeader, Empty } from '../components/common';
 import {
@@ -121,7 +121,7 @@ function drawDetectionsOnCanvas(
 
     // 第二行: ID + 颜色 + 车型 + 置信度
     const vt = VEHICLE_TYPE_MAP[d.vehicleType];
-    const info = `#${d.trackId} · ${d.color} · ${vt?.icon||''} ${vt?.label||d.vehicleType} · ${(d.confidence * 100).toFixed(0)}%`;
+    const info = `${d.color} · ${vt?.icon||''} ${vt?.label||d.vehicleType} · ${(d.confidence * 100).toFixed(0)}%`;
     ctx.font = '11px -apple-system, sans-serif';
     const infoY = y > 30 ? y - 36 : y + h + 36;
     ctx.fillStyle = color;
@@ -214,6 +214,10 @@ const PlateRecognition: React.FC = () => {
   // ── Stream 模式状态 ──
   const [streamUrl, setStreamUrl] = useState('');
   const [streamName, setStreamName] = useState('');
+  const [streamPushEnabled, setStreamPushEnabled] = useState(false);
+  const [streamPushUrl, setStreamPushUrl] = useState('');
+  const [streamPushActive, setStreamPushActive] = useState(false);
+  const [streamPushAddress, setStreamPushAddress] = useState<string | null>(null);
   const [streamImgSrc, setStreamImgSrc] = useState<string | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
   const [streamRunning, setStreamRunning] = useState(false);
@@ -542,7 +546,7 @@ const PlateRecognition: React.FC = () => {
       ctx.fillStyle = '#fff';
       ctx.fillText(label, x + 8, labelY - 7);
 
-      const info = `#${d.trackId} · ${d.color} · ${(d.confidence * 100).toFixed(0)}%`;
+      const info = `${d.color} · ${(d.confidence * 100).toFixed(0)}%`;
       ctx.font = '11px -apple-system, sans-serif';
       const infoY = y > 30 ? y - 36 : y + h + 36;
       ctx.fillStyle = color;
@@ -659,15 +663,24 @@ const PlateRecognition: React.FC = () => {
     setStreamRunning(true);
     setStreamPlateSummary([]);
     setStreamDetections([]);
+    setStreamPushActive(false);
+    setStreamPushAddress(null);
     lastValidStreamRef.current = [];
     setTrackProgress(0);
     setStreamImgSrc(null);
 
     try {
-      const res = await startStreamTracking(streamUrl.trim(), streamName.trim() || undefined);
+      const res = await startStreamTracking(
+        streamUrl.trim(),
+        streamName.trim() || undefined,
+        streamPushEnabled || undefined,
+        streamPushUrl.trim() || undefined,
+      );
       if (res.data.code === 200) {
-        const { sessionId } = res.data.data;
+        const { sessionId, pushEnabled, pushUrl } = res.data.data;
         setStreamSessionId(sessionId);
+        setStreamPushActive(!!pushEnabled);
+        setStreamPushAddress(pushUrl || null);
         connectStreamWs(sessionId);
       } else {
         message.error(res.data.message || '启动失败');
@@ -980,7 +993,6 @@ const PlateRecognition: React.FC = () => {
                       }}
                     >
                       <Space>
-                        <Tag color="blue">#{d.trackId}</Tag>
                         <Text strong style={{ fontSize: 15 }}>{d.plateNo}</Text>
                         <Tag color={PLATE_COLOR_MAP[d.color]?.color}>
                           {PLATE_COLOR_MAP[d.color]?.label || d.color}
@@ -1078,15 +1090,43 @@ const PlateRecognition: React.FC = () => {
           </Button>
         </div>
 
+        {/* 推流配置 */}
+        <div style={{ marginTop: 12, padding: '12px 16px', background: '#fafafa', borderRadius: 8, border: '1px solid #f0f0f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: streamPushEnabled ? 12 : 0 }}>
+            <Switch
+              checked={streamPushEnabled}
+              onChange={setStreamPushEnabled}
+              disabled={streamRunning}
+              checkedChildren="推流已开启"
+              unCheckedChildren="推流已关闭"
+            />
+            <Text type="secondary">将识别后的画面推送到流媒体服务器, 可通过 HLS/WebRTC 查看</Text>
+          </div>
+          {streamPushEnabled && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Input
+                placeholder="推流地址 (留空自动生成: rtsp://localhost:8554/recognized/{sessionId})"
+                prefix={<ExportOutlined />}
+                value={streamPushUrl}
+                onChange={(e) => setStreamPushUrl(e.target.value)}
+                size="small"
+                disabled={streamRunning}
+                style={{ flex: 1 }}
+              />
+            </div>
+          )}
+        </div>
+
         <div style={{ marginTop: 16 }}>
           <Alert
             type="info"
             message="需要配合 MediaMTX + FFmpeg 使用"
             description={
               <ol style={{ margin: '4px 0', paddingLeft: 20 }}>
-                <li>启动 MediaMTX 流媒体服务器</li>
+                <li>启动 MediaMTX 流媒体服务器 (运行 mediamtx.exe)</li>
                 <li>使用 FFmpeg 推送摄像头流: <Text code>ffmpeg -f dshow -i video="摄像头" -f rtsp rtsp://localhost:8554/camera</Text></li>
                 <li>在上方输入流地址, 点击"启动追踪"</li>
+                <li>开启推流后可通过 HLS/WebRTC 查看识别画面</li>
               </ol>
             }
             showIcon
@@ -1094,7 +1134,7 @@ const PlateRecognition: React.FC = () => {
         </div>
       </Card>
 
-      {/* 连接状态 + 进度 */}
+      {/* 连接状态 + 进度 + 推流信息 */}
       {streamSessionId && wsStatus === 'connected' && (
         <Card size="small" style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
@@ -1108,6 +1148,25 @@ const PlateRecognition: React.FC = () => {
               <Text type="secondary">已处理 {trackProcessedFrames} 帧</Text>
             </Space>
           </div>
+          {/* 推流访问信息 */}
+          {streamPushActive && streamPushAddress && (
+            <div style={{ marginTop: 10, padding: '8px 12px', background: '#f6ffed', borderRadius: 6, border: '1px solid #b7eb8f' }}>
+              <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Tag color="success" icon={<ExportOutlined />}>推流中</Tag>
+                  <Text strong style={{ fontSize: 13 }}>识别画面推送地址:</Text>
+                </div>
+                <div>
+                  <Text code style={{ fontSize: 12 }}>{streamPushAddress}</Text>
+                </div>
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  📺 HLS 播放: <Text code>{`http://localhost:8888/recognized/${streamSessionId}/index.m3u8`}</Text>
+                  {' | '}
+                  WebRTC: <Text code>{`http://localhost:8889/recognized/${streamSessionId}`}</Text>
+                </Text>
+              </Space>
+            </div>
+          )}
         </Card>
       )}
 
@@ -1167,7 +1226,6 @@ const PlateRecognition: React.FC = () => {
                       }}
                     >
                       <Space>
-                        <Tag color="blue">#{d.trackId}</Tag>
                         <Text strong style={{ fontSize: 16 }}>{d.plateNo}</Text>
                         <Tag color={PLATE_COLOR_MAP[d.color]?.color}>
                           {PLATE_COLOR_MAP[d.color]?.label || d.color}

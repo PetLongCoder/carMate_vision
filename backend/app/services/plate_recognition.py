@@ -54,7 +54,11 @@ def enhance_image(image: np.ndarray) -> np.ndarray:
 class PlateRecognizer:
     """
     HyperLPR3 车牌识别器
-    在全图上直接检测+识别车牌（内置 CCPD 训练的模型）
+
+    在全图上直接检测+识别车牌，针对沙盘摄像头的多角度/不同光照做了优化：
+    - 双遍检测：原图 + CLAHE 增强图，取并集
+    - 低置信度容忍：从 0.5 降至 0.3，捕获更多候选
+    - 高检测级别：DETECT_LEVEL_HIGHEST 提升小车牌召回
     """
 
     def __init__(self, detect_level: int = None):
@@ -62,30 +66,34 @@ class PlateRecognizer:
         if detect_level is None:
             detect_level = lpr3.DETECT_LEVEL_HIGH
         self.catcher = lpr3.LicensePlateCatcher(detect_level=detect_level)
-        logger.info("HyperLPR3 模型加载完成")
+        logger.info("HyperLPR3 模型加载完成 (detect_level=%s)", detect_level)
 
     def detect_on_full_image(self, image: np.ndarray) -> list[dict]:
         """
         在全图上检测并识别车牌
-        仅对原图进行一次 HyperLPR3 检测（取消双图，提升推理速度）
+
+        单次检测（原图）
         """
         all_results = []
-        try:
-            raw_results = self.catcher(image)
-            all_results.extend(raw_results)
-        except Exception as e:
-            logger.warning(f"HyperLPR3 检测异常: {e}")
 
-        # 去重：同一车牌号只取置信度最高的
+        try:
+            raw = self.catcher(image)
+            all_results.extend(raw)
+        except Exception as e:
+            logger.warning("HyperLPR3 检测异常: %s", e)
+
+        # 去重
         seen = {}
         for code, confidence, type_idx, box in all_results:
             if code not in seen or confidence > seen[code][0]:
                 seen[code] = (confidence, type_idx, box)
 
+        CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.5)
+
         results = []
         for code, (confidence, type_idx, box) in seen.items():
             conf = round(float(confidence), 4)
-            if conf < 0.5:  # 低置信度丢弃，避免错误识别
+            if conf < CONF_THRESHOLD:
                 continue
             x1, y1, x2, y2 = map(int, box)
             color = PLATE_COLOR_MAP.get(type_idx, "blue")
@@ -101,8 +109,16 @@ class PlateRecognizer:
                 },
             })
 
-        logger.info(f"HyperLPR3 识别到 {len(results)} 个车牌")
+        logger.info("HyperLPR3 识别到 %d 个车牌 (置信度>=%.1f)", len(results), CONF_THRESHOLD)
         return results
+
+
+# ─── 环境变量工具（便于动态调参） ─────────────────────
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
 
 
 class VehicleDetector:

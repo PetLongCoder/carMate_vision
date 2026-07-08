@@ -10,6 +10,7 @@
 
 流媒体模式 (STREAM):
   保持连续处理循环（直播流需要持续跟上）。
+  可选: 通过 FFmpeg 将标注帧推送到 MediaMTX 等流媒体服务器。
 """
 import asyncio
 import json
@@ -26,17 +27,26 @@ from app.services.session_manager import (
     SessionType,
     session_manager,
 )
+from app.services.stream_pusher import FFmpegPusher, create_pusher
 from app.utils.logger import logger
 
 
-async def run_video_session(session: TrackingSession):
+async def run_video_session(
+    session: TrackingSession,
+    push_url: Optional[str] = None,
+):
     """
     后台任务: 处理视频文件或流 URL
 
     根据 session.type 分两种模式运行。
+
+    Args:
+        session:   追踪会话
+        push_url:  可选推流地址 (仅 STREAM 模式), 如 rtsp://localhost:8554/recognized/cam1
     """
     cap: Optional[cv2.VideoCapture] = None
     processor = VideoStreamProcessor(process_every_n_frames=1)
+    pusher: Optional[FFmpegPusher] = None
     processed_cache: dict[int, list[dict]] = {}  # aligned_frame → results
 
     try:
@@ -53,11 +63,33 @@ async def run_video_session(session: TrackingSession):
             session.total_frames = total
         session.fps = fps
 
+        # 获取帧尺寸 (推流需要)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+
+        # ── STREAM 模式且指定了推流地址 → 启动 FFmpeg 推送 ──
+        if session.type == SessionType.STREAM and push_url:
+            pusher = create_pusher(
+                dst_url=push_url,
+                width=width,
+                height=height,
+                fps=min(int(fps) if fps > 0 else 25, 30),
+            )
+            if pusher is None:
+                logger.warning(
+                    "推流启动失败, 将继续处理但不推送: %s", push_url
+                )
+            else:
+                logger.info(
+                    "推流已启动: %s (%dx%d@%d)",
+                    push_url, width, height, pusher.fps
+                )
+
         all_results: list[dict] = []
         last_processed_frame: int = -1
 
         if session.type == SessionType.STREAM:
-            await _run_stream_loop(session, cap, processor, total, fps)
+            await _run_stream_loop(session, cap, processor, total, fps, pusher=pusher)
         else:
             await _run_event_loop(
                 session, cap, processor, total, fps, processed_cache,
@@ -83,6 +115,8 @@ async def run_video_session(session: TrackingSession):
     finally:
         if cap is not None:
             cap.release()
+        if pusher is not None:
+            pusher.stop()
         await _delayed_cleanup(session.session_id)
 
 
@@ -220,15 +254,24 @@ async def _run_stream_loop(
     processor: VideoStreamProcessor,
     total: int,
     fps: float,
+    pusher: Optional[FFmpegPusher] = None,
 ):
     """
     连续处理循环 — 用于流媒体 (STREAM)
 
-    保持逐帧读取处理，与原始行为一致。
+    保持逐帧读取处理。
+    若提供了 pusher, 将标注帧通过 FFmpeg 推送到目标流媒体地址。
+
+    流程:
+      pull RTSP frame → detect & track → draw annotations
+        ├─ broadcast results via WebSocket
+        ├─ save JPEG for MJPEG stream
+        └─ push annotated frame to MediaMTX (if pusher enabled)
     """
     logger.info(f"会话 {session.session_id} 进入流媒体连续处理模式")
     frame_idx = 0
     start_time = time.time()
+    push_enabled = pusher is not None and pusher.is_running
 
     while True:
         ret, frame = cap.read()
@@ -239,8 +282,14 @@ async def _run_stream_loop(
         timestamp = frame_idx / fps if fps > 0 else 0
         session.processed_frames += 1
 
-        # 保存标注帧给 MJPEG 流
-        if annotated is not None:
+        # ── 推送标注帧到 FFmpeg ──
+        if push_enabled and annotated is not None and annotated.size > 0:
+            if not pusher.write_frame(annotated):
+                logger.warning("推流写入失败, 已禁用推流")
+                push_enabled = False
+
+        # ── 保存标注帧给 MJPEG 流 ──
+        if annotated is not None and annotated.size > 0:
             _, jpeg = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 75])
             await session.set_frame(jpeg.tobytes())
 
@@ -255,13 +304,16 @@ async def _run_stream_loop(
         })
 
         if frame_idx % 15 == 0:
+            progress = round(pusher.frames_pushed / max(frame_idx, 1), 2) if push_enabled else 0
             await session.broadcast({
                 "type": "status",
                 "sessionId": session.session_id,
                 "status": "processing",
-                "progress": 0,
+                "progress": progress,
                 "framesProcessed": frame_idx,
                 "totalFrames": 0,
+                "pushFramesPushed": pusher.frames_pushed if push_enabled else 0,
+                "pushRunning": push_enabled,
             })
 
         frame_idx += 1
@@ -275,7 +327,11 @@ async def _run_stream_loop(
             await asyncio.sleep(0)
 
     elapsed = time.time() - start_time
-    logger.info(f"流会话 {session.session_id} 处理完成: {frame_idx} 帧, {elapsed:.1f}s")
+    push_info = f", 推流 {pusher.frames_pushed} 帧" if push_enabled else ""
+    logger.info(
+        "流会话 %s 处理完成: %d 帧, %.1fs%s",
+        session.session_id, frame_idx, elapsed, push_info
+    )
 
     if session.status != SessionStatus.STOPPED:
         session.update_status(SessionStatus.COMPLETED)

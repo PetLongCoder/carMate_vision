@@ -13,6 +13,7 @@ import asyncio
 import os
 import time
 import tempfile
+from typing import Optional
 from pathlib import Path
 
 import cv2
@@ -152,16 +153,21 @@ async def track_video(file: UploadFile = File(...)):
 async def start_stream_tracking(
     url: str = Form(...),
     name: str = Form(""),
+    push_enabled: bool = Form(False),
+    push_url: str = Form(""),
 ):
     """
     启动流媒体追踪 (POST /api/plate/stream/start)
 
     接收 RTSP/RTMP/HTTP 流地址, 启动后台帧处理任务。
-    配合 WebSocket 实时接收检测结果。
+    可选择将标注后的视频帧推送到指定流媒体地址。
 
     参数:
-      url:  流地址 (例如 rtsp://localhost:8554/camera)
-      name: 可选名称 (例如 "前摄像头")
+      url:          流地址 (例如 rtsp://localhost:8554/camera)
+      name:         可选名称 (例如 "前摄像头")
+      push_enabled: 是否启用推流 (默认 False)
+      push_url:     推流目标地址, 为空时自动生成
+                    (例如 rtsp://localhost:8554/recognized/{sessionId})
 
     返回 sessionId, 用于 WebSocket 连接:
       ws://host/api/ws/plate/track/{sessionId}
@@ -169,6 +175,7 @@ async def start_stream_tracking(
     前置条件:
       - 流媒体服务器 (如 MediaMTX) 已启动并推送流
       - 确保后端能访问该流地址
+      - 启用推流需要安装 FFmpeg 并加入 PATH
     """
     if not url or not url.strip():
         raise HTTPException(status_code=400, detail="流地址不能为空")
@@ -188,11 +195,24 @@ async def start_stream_tracking(
     # 创建会话
     session = await session_manager.create_session(SessionType.STREAM, url)
 
+    # 确定推流地址
+    resolved_push_url: Optional[str] = None
+    if push_enabled:
+        resolved_push_url = (
+            push_url.strip()
+            if push_url.strip()
+            else f"rtsp://127.0.0.1:8554/recognized/{session.session_id}"
+        )
+        logger.info("推流已启用, 目标地址: %s", resolved_push_url)
+
     # 在后台启动处理任务
     from app.services.video_processor import run_video_session
-    asyncio.create_task(run_video_session(session))
+    asyncio.create_task(run_video_session(session, push_url=resolved_push_url))
 
-    logger.info(f"流追踪会话已创建: {session.session_id}, URL: {url}")
+    logger.info(
+        "流追踪会话已创建: %s, URL: %s, 推流: %s",
+        session.session_id, url, resolved_push_url or "禁用"
+    )
 
     return {
         "code": 200,
@@ -203,6 +223,8 @@ async def start_stream_tracking(
             "url": url,
             "status": SessionStatus.PROCESSING.value,
             "wsEndpoint": f"/api/ws/plate/track/{session.session_id}",
+            "pushEnabled": push_enabled,
+            "pushUrl": resolved_push_url or None,
         },
     }
 

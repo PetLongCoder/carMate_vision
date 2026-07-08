@@ -1,0 +1,61 @@
+2026/07/07 16:25:25 INF MediaMTX v1.19.2, windows, amd64
+2026/07/07 16:25:25 INF configuration loaded from E:\hmdocument\大二下小学期\carMate_vision\mediamtx\mediamtx.yml
+2026/07/07 16:25:25 INF [RTSP] started with listeners on :8554 (TCP/RTSP), :8000 (UDP/RTP), :8001 (UDP/RTCP)
+2026/07/07 16:25:25 INF [RTMP] started with listener on :1935 (TCP/RTMP)
+2026/07/07 16:25:25 INF [HLS] started with listener on :8888 (TCP/HTTP)
+2026/07/07 16:25:25 INF [WebRTC] started with listeners on :8889 (TCP/HTTP), :8189 (UDP/ICE)
+2026/07/07 16:25:25 INF [SRT] started with listener on :8890 (UDP/SRT)
+2026/07/07 16:25:25 INF [MoQ] started with listeners on :8892 (TCP/HTTP2), :8892 (UDP/HTTP3)
+2026/07/07 16:25:32 INF [RTSP] [conn [::1]:53068] opened
+2026/07/07 16:25:32 INF [RTSP] [session 94498f3c] created by [::1]:53068
+2026/07/07 16:25:32 INF [path camera] stream is available and online, 2 tracks (H264, MPEG-4 Audio)
+2026/07/07 16:25:32 INF [RTSP] [session 94498f3c] is publishing to path 'camera'
+2026/07/07 16:25:32 INF [path camera] RTP packets are too big (1460 > 1440), remuxing them into smaller ones
+2026/07/07 16:25:35 WAR [RTSP] [session 94498f3c] 7 RTP packets lost
+2026/07/07 16:25:36 WAR [RTSP] [session 94498f3c] 12 RTP packets lost
+2026/07/07 16:25:36 WAR [path camera] 62 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:25:38 WAR [RTSP] [session 94498f3c] 26 RTP packets lost
+2026/07/07 16:25:38 WAR [path camera] 44 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:25:39 WAR [RTSP] [session 94498f3c] 23 RTP packets lost
+2026/07/07 16:25:40 WAR [RTSP] [session 94498f3c] 17 RTP packets lost
+2026/07/07 16:25:40 WAR [path camera] 14 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:25:43 WAR [RTSP] [session 94498f3c] 7 RTP packets lost
+2026/07/07 16:25:43 WAR [path camera] 12 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:25:46 WAR [RTSP] [session 94498f3c] 17 RTP packets lost
+2026/07/07 16:25:46 WAR [path camera] 13 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:25:47 WAR [RTSP] [session 94498f3c] 6 RTP packets lost
+2026/07/07 16:25:48 WAR [RTSP] [session 94498f3c] 84 RTP packets lost
+2026/07/07 16:25:48 WAR [path camera] 26 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:25:50 WAR [RTSP] [session 94498f3c] 7 RTP packets lost
+2026/07/07 16:25:58 WAR [RTSP] [session 94498f3c] 12 RTP packets lost
+2026/07/07 16:25:58 WAR [path camera] 34 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:00 WAR [RTSP] [session 94498f3c] 7 RTP packets lost
+2026/07/07 16:26:00 WAR [path camera] 59 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:01 WAR [RTSP] [session 94498f3c] 97 RTP packets lost
+2026/07/07 16:26:01 WAR [path camera] 107 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:02 WAR [RTSP] [session 94498f3c] 12 RTP packets lost
+2026/07/07 16:26:02 WAR [path camera] 79 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:03 WAR [RTSP] [session 94498f3c] 24 RTP packets lost
+2026/07/07 16:26:04 WAR [RTSP] [session 94498f3c] 1 RTP packet lost
+2026/07/07 16:26:04 WAR [path camera] 123 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:05 WAR [RTSP] [session 94498f3c] 12 RTP packets lost
+2026/07/07 16:26:05 WAR [path camera] 9 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:06 WAR [RTSP] [session 94498f3c] 25 RTP packets lost
+2026/07/07 16:26:07 WAR [RTSP] [session 94498f3c] 23 RTP packets lost
+2026/07/07 16:26:07 WAR [path camera] 78 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:08 WAR [RTSP] [session 94498f3c] 70 RTP packets lost
+2026/07/07 16:26:12 WAR [RTSP] [session 94498f3c] 11 RTP packets lost
+2026/07/07 16:26:12 WAR [path camera] 98 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:17 WAR [RTSP] [session 94498f3c] 12 RTP packets lost
+2026/07/07 16:26:17 WAR [path camera] 14 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:18 WAR [RTSP] [session 94498f3c] 2 RTP packets lost
+2026/07/07 16:26:22 WAR [RTSP] [session 94498f3c] 33 RTP packets lost
+2026/07/07 16:26:22 WAR [path camera] 59 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:23 WAR [RTSP] [session 94498f3c] 60 RTP packets lost
+2026/07/07 16:26:23 WAR [path camera] 121 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:25 WAR [RTSP] [session 94498f3c] 2 RTP packets lost
+2026/07/07 16:26:25 WAR [path camera] 37 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:26 WAR [RTSP] [session 94498f3c] 56 RTP packets lost
+2026/07/07 16:26:26 WAR [path camera] 142 processing errors, last was: invalid FU-A packet (non-starting)
+2026/07/07 16:26:26 INF [RTSP] [session 94498f3c] destroyed: torn down by [::1]:53068
+2026/07/07 16:26:26 INF [RTSP] [conn [::1]:53068] closed: read tcp [::1]:8554->[::1]:53068: wsarecv: An established connection was aborted by the software in your host machine.
