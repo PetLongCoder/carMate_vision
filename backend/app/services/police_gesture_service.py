@@ -288,16 +288,126 @@ def predict_video_frame(img_bgr: np.ndarray, state):
         os.chdir(old_cwd)
 
 
+def _coord_pose_quality(coord_norm: np.ndarray) -> dict:
+    coords = np.asarray(coord_norm)
+    if coords.ndim != 2 or coords.shape[1] < 2:
+        return {
+            "score": 0.0,
+            "valid": False,
+            "validKeypoints": 0,
+            "validUpperKeypoints": 0,
+            "validArmKeypoints": 0,
+            "bboxArea": 0.0,
+        }
+
+    xy = coords[:, :2]
+    valid_mask = (
+        np.isfinite(xy[:, 0])
+        & np.isfinite(xy[:, 1])
+        & (xy[:, 0] > 0.01)
+        & (xy[:, 1] > 0.01)
+        & (xy[:, 0] < 0.99)
+        & (xy[:, 1] < 0.99)
+    )
+
+    # AI Challenger order: shoulders/elbows/wrists + neck are most important for police gestures.
+    upper_indices = [0, 1, 2, 3, 4, 5, 13]
+    arm_indices = [0, 1, 2, 3, 4, 5]
+    upper_indices = [idx for idx in upper_indices if idx < len(valid_mask)]
+    arm_indices = [idx for idx in arm_indices if idx < len(valid_mask)]
+
+    valid_points = xy[valid_mask]
+    if valid_points.size:
+        min_xy = valid_points.min(axis=0)
+        max_xy = valid_points.max(axis=0)
+        bbox_area = float(max(0.0, max_xy[0] - min_xy[0]) * max(0.0, max_xy[1] - min_xy[1]))
+    else:
+        bbox_area = 0.0
+
+    valid_upper = int(valid_mask[upper_indices].sum()) if upper_indices else 0
+    valid_arm = int(valid_mask[arm_indices].sum()) if arm_indices else 0
+    upper_ratio = valid_upper / max(1, len(upper_indices))
+    arm_ratio = valid_arm / max(1, len(arm_indices))
+    area_score = min(1.0, bbox_area / 0.08)
+    score = 0.5 * upper_ratio + 0.4 * arm_ratio + 0.1 * area_score
+
+    return {
+        "score": round(float(score), 4),
+        "valid": bool(score >= STREAM_POSE_MIN_QUALITY and valid_upper >= 4 and valid_arm >= 3),
+        "validKeypoints": int(valid_mask.sum()),
+        "validUpperKeypoints": valid_upper,
+        "validArmKeypoints": valid_arm,
+        "bboxArea": round(bbox_area, 4),
+    }
+
+
+def predict_stream_frame_candidate(img_bgr: np.ndarray, state):
+    """Realtime stream inference with pose-quality gating.
+
+    Bad pose frames are not fed into the LSTM, which prevents one blurry or
+    cropped frame from poisoning the sequence state.
+    """
+    import torch
+    from constants.enum_keys import PG as _PG
+
+    old_cwd = os.getcwd()
+    os.chdir(str(_CTPGR_DIR))
+    try:
+        p_res = _shared_pose.get_coordinates(img_bgr)
+        coord_norm = p_res[_PG.COORD_NORM]
+        pose_quality = _coord_pose_quality(coord_norm)
+        if not pose_quality["valid"]:
+            scores_arr = np.zeros(len(GESTURE_NAMES_CN), dtype=np.float32)
+            scores_arr[0] = 1.0
+            return 0, scores_arr, state, pose_quality, False
+
+        coord_norm = coord_norm[np.newaxis]
+        ges_data = _shared_bla.handcrafted_features(coord_norm)
+        features = np.concatenate(
+            (
+                ges_data[_PG.BONE_LENGTH],
+                ges_data[_PG.BONE_ANGLE_COS],
+                ges_data[_PG.BONE_ANGLE_SIN],
+            ),
+            axis=1,
+        )
+        features = features[np.newaxis].transpose((1, 0, 2))
+        features = torch.from_numpy(features).float().to(_shared_lstm.device)
+
+        h, c = state
+        with torch.no_grad():
+            _, h, c, class_out = _shared_lstm(features, h, c)
+
+        np_out = class_out[0].cpu().numpy()
+        scores_arr = np_out if np_out.ndim == 1 else np_out[0]
+        gesture_id = int(np.argmax(scores_arr))
+        return gesture_id, scores_arr, (h.detach(), c.detach()), pose_quality, True
+    finally:
+        os.chdir(old_cwd)
+
+
 # ═══════════════════════════════════════════════════════════════
 #  Stream state management
 # ═══════════════════════════════════════════════════════════════
 
-_stream_states: dict[str, tuple] = {}
+_stream_states: dict[str, tuple] = {}          # LSTM 隐藏状态
+_stream_histories: dict[str, list[dict]] = {}  # 帧历史缓冲区 (用于平滑/分段)
+_stream_segments: dict[str, list[dict]] = {}   # 已确认的手势段列表
+_stream_frame_count: dict[str, int] = {}       # 流已处理的帧计数
+_stream_start_times: dict[str, float] = {}     # 流开始时间
+_stream_stable_results: dict[str, dict] = {}   # 当前稳定输出
+_stream_candidates: dict[str, dict] = {}       # 等待确认的候选输出
 
 
 def reset_stream_state(stream_id: str = "default") -> None:
     """重置摄像头的 LSTM 流状态"""
     _stream_states.pop(stream_id, None)
+    _stream_histories.pop(stream_id, None)
+    _stream_segments.pop(stream_id, None)
+    _stream_frame_count.pop(stream_id, None)
+    _stream_start_times.pop(stream_id, None)
+    _stream_stable_results.pop(stream_id, None)
+    _stream_candidates.pop(stream_id, None)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -943,8 +1053,96 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
 #  Stream frame processing (realtime camera)
 # ═══════════════════════════════════════════════════════════════
 
+# 流式帧处理参数
+STREAM_HISTORY_MAX = 15       # 累积帧数 (~7.5s@500ms), 用于平滑分段
+STREAM_SMOOTH_WINDOW = 5      # 平滑滑动窗口
+STREAM_WARMUP_FRAMES = 15     # LSTM 预热帧数
+STREAM_MIN_SEGMENT_FRAMES = 2  # 手势至少连续 N 帧才确认新段
+STREAM_POSE_MIN_QUALITY = _env_float("CARMATE_STREAM_POSE_MIN_QUALITY", 0.55)
+STREAM_MIN_CONFIDENCE = _env_float("CARMATE_STREAM_MIN_CONFIDENCE", 0.32)
+STREAM_SWITCH_MIN_FRAMES = max(1, _env_int("CARMATE_STREAM_SWITCH_MIN_FRAMES", 2))
+STREAM_KEEP_LAST_SECONDS = _env_float("CARMATE_STREAM_KEEP_LAST_SECONDS", 1.2)
+
+
+def _stream_smooth_vote(history: list[dict]) -> tuple[int, float]:
+    """滑动窗口投票: 返回 (最佳手势ID, 平滑置信度)"""
+    window = [
+        item
+        for item in history[-STREAM_SMOOTH_WINDOW:]
+        if item.get("validPose", True)
+        and (item["gestureId"] == 0 or item["confidence"] >= STREAM_MIN_CONFIDENCE)
+    ]
+    if not window:
+        return 0, 0.0
+
+    votes: dict[int, int] = {}
+    confs: dict[int, float] = {}
+    for item in window:
+        gid = item["gestureId"]
+        votes[gid] = votes.get(gid, 0) + 1
+        confs[gid] = confs.get(gid, 0.0) + item["confidence"]
+    best = max(votes, key=lambda g: (votes[g], confs[g] / votes[g]))
+    return int(best), round(confs[best] / votes[best], 4)
+
+
+def _stable_stream_result(stream_id: str, proposed_gid: int, proposed_conf: float, now: float, valid_pose: bool) -> tuple[int, float, bool]:
+    stable = _stream_stable_results.get(stream_id)
+    if not valid_pose:
+        if stable and now - stable.get("updatedAt", now) <= STREAM_KEEP_LAST_SECONDS:
+            return int(stable["gestureId"]), float(stable["confidence"]), False
+        proposed_gid = 0
+        proposed_conf = 0.0
+
+    if proposed_gid > 0 and proposed_conf < STREAM_MIN_CONFIDENCE:
+        if stable:
+            return int(stable["gestureId"]), float(stable["confidence"]), False
+        proposed_gid = 0
+        proposed_conf = 0.0
+
+    if stable is None:
+        _stream_stable_results[stream_id] = {
+            "gestureId": proposed_gid,
+            "confidence": proposed_conf,
+            "updatedAt": now,
+        }
+        _stream_candidates.pop(stream_id, None)
+        return proposed_gid, proposed_conf, True
+
+    stable_gid = int(stable["gestureId"])
+    if proposed_gid == stable_gid:
+        stable["confidence"] = proposed_conf
+        stable["updatedAt"] = now
+        _stream_candidates.pop(stream_id, None)
+        return proposed_gid, proposed_conf, False
+
+    candidate = _stream_candidates.get(stream_id)
+    if candidate and candidate["gestureId"] == proposed_gid:
+        candidate["count"] += 1
+        candidate["confidence"] = max(float(candidate["confidence"]), proposed_conf)
+    else:
+        candidate = {"gestureId": proposed_gid, "confidence": proposed_conf, "count": 1}
+        _stream_candidates[stream_id] = candidate
+
+    if candidate["count"] >= STREAM_SWITCH_MIN_FRAMES:
+        _stream_stable_results[stream_id] = {
+            "gestureId": proposed_gid,
+            "confidence": float(candidate["confidence"]),
+            "updatedAt": now,
+        }
+        _stream_candidates.pop(stream_id, None)
+        return proposed_gid, float(candidate["confidence"]), True
+
+    return stable_gid, float(stable["confidence"]), False
+
+
 def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
-    """处理实时摄像头的单帧图像"""
+    """处理实时摄像头的单帧图像
+
+    改进策略:
+    1. 双模推理: 仅预热期同时跑 LSTM + 单帧, 成熟后避免重复姿态推理
+    2. 大帧缓冲: 累积 15 帧用于平滑和分段
+    3. 视频级后处理: 复用 _build_segments 做段检测
+    """
     import torch as _torch
     import torch.nn.functional as F
 
@@ -959,24 +1157,128 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
     img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
     re_frame = resize_keep_ratio(img_bgr, (512, 512))
 
-    state = _stream_states.get(stream_id)
-    if state is None:
-        state = (_shared_lstm.h0(), _shared_lstm.c0())
+    now = time.time()
+    now_ms = int(now * 1000)
 
-    start = time.time()
-    gesture_id, scores_arr, state = predict_video_frame(re_frame, state)
-    _stream_states[stream_id] = state
-    elapsed = time.time() - start
+    # ---- 帧计数 (用于预热判断) ----
+    fc = _stream_frame_count.get(stream_id, 0) + 1
+    _stream_frame_count[stream_id] = fc
+
+    # ---- LSTM 推理 ----
+    inference_start = time.time()
+    lstm_state = _stream_states.get(stream_id)
+    if lstm_state is None:
+        lstm_state = (_shared_lstm.h0(), _shared_lstm.c0())
+
+    lstm_gid, scores_arr, lstm_state, pose_quality, state_updated = predict_stream_frame_candidate(re_frame, lstm_state)
+    if state_updated:
+        _stream_states[stream_id] = lstm_state
 
     if isinstance(scores_arr, np.ndarray):
         t = _torch.from_numpy(scores_arr).float()
     else:
         t = scores_arr.float()
-    scores = F.softmax(t, dim=-1).tolist()
-    confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
-    gesture_cn = GESTURE_NAMES_CN[gesture_id] if gesture_id < len(GESTURE_NAMES_CN) else "未知"
+    lstm_scores = F.softmax(t, dim=-1).tolist()
+    lstm_conf = float(lstm_scores[lstm_gid]) if lstm_gid < len(lstm_scores) else 0.0
+    if not state_updated:
+        lstm_scores = [0.0] * len(GESTURE_NAMES_CN)
+        lstm_scores[0] = 1.0
+        lstm_conf = 1.0
 
-    top5 = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[:5]
+    if state_updated and fc <= STREAM_WARMUP_FRAMES:
+        # ---- 单帧独立推理 (仅预热期辅助，复用 512 输入尺寸) ----
+        single_gid, single_scores_arr = predict_single_frame(re_frame)
+        if isinstance(single_scores_arr, np.ndarray):
+            st = _torch.from_numpy(single_scores_arr).float()
+        else:
+            st = single_scores_arr.float() if hasattr(single_scores_arr, 'float') else _torch.tensor(single_scores_arr)
+        single_scores = F.softmax(st, dim=-1).tolist()
+        single_conf = float(single_scores[single_gid]) if single_gid < len(single_scores) else 0.0
+
+        # 预热期: 单帧 + LSTM 加权融合
+        single_weight = max(0, 1.0 - fc / STREAM_WARMUP_FRAMES)  # 逐渐降低
+        lstm_weight = 1.0 - single_weight
+
+        # 计算融合分
+        fused: dict[int, float] = {}
+        for i in range(len(lstm_scores)):
+            fused[i] = lstm_scores[i] * lstm_weight + single_scores[i] * single_weight
+        raw_gid = int(max(fused, key=fused.get))
+        raw_conf = round(float(fused[raw_gid]), 4)
+    else:
+        single_gid = lstm_gid
+        single_conf = lstm_conf
+        raw_gid = lstm_gid
+        raw_conf = round(lstm_conf, 4)
+    elapsed = time.time() - inference_start
+
+    # ---- 帧历史缓冲区 ----
+    history: list[dict] = _stream_histories.get(stream_id, [])
+    # 首帧参考时间 (转为相对秒)
+    t0 = _stream_start_times.setdefault(stream_id, now)
+
+    raw_item = {
+        "frame": fc,
+        "time": round(now - t0, 3),
+        "gestureId": raw_gid,
+        "confidence": raw_conf,
+        "lstmGid": lstm_gid,
+        "lstmConf": round(lstm_conf, 4),
+        "singleGid": single_gid,
+        "singleConf": round(single_conf, 4),
+        "validPose": bool(state_updated),
+        "poseQuality": pose_quality["score"],
+    }
+
+    history.append(raw_item)
+    if len(history) > STREAM_HISTORY_MAX:
+        history = history[-STREAM_HISTORY_MAX:]
+
+    # ---- 滑动窗口平滑 ----
+    proposed_gid, proposed_conf = _stream_smooth_vote(history)
+    best_gid, smoothed_conf, stable_changed = _stable_stream_result(
+        stream_id,
+        proposed_gid,
+        proposed_conf,
+        now,
+        bool(state_updated),
+    )
+    smoothed_gesture = GESTURE_NAMES_CN[best_gid] if best_gid < len(GESTURE_NAMES_CN) else "未知"
+    raw_item["stableGestureId"] = best_gid
+    raw_item["stableConfidence"] = smoothed_conf
+    raw_item["gesture"] = smoothed_gesture
+    _stream_histories[stream_id] = history
+
+    # ---- 分段检测 (复用视频模式的 _build_segments) ----
+    stable_history = [
+        {
+            "frame": item["frame"],
+            "time": item["time"],
+            "gestureId": item.get("stableGestureId", item["gestureId"]),
+            "gesture": GESTURE_NAMES_CN[item.get("stableGestureId", item["gestureId"])]
+            if item.get("stableGestureId", item["gestureId"]) < len(GESTURE_NAMES_CN)
+            else "未知",
+            "confidence": item.get("stableConfidence", item["confidence"]),
+        }
+        for item in history
+    ]
+    segments = _build_segments(stable_history) if len(stable_history) >= STREAM_SMOOTH_WINDOW else []
+    all_segments = _stream_segments.get(stream_id, [])
+    segment_changed = False
+
+    if segments:
+        # 检查是否有新段 (最后一段)
+        last_seg = segments[-1]
+        already_seen = any(s["start"] == last_seg["start"] and s["gestureId"] == last_seg["gestureId"] for s in all_segments)
+        if not already_seen:
+            all_segments.append(last_seg)
+            _stream_segments[stream_id] = all_segments
+            segment_changed = True
+
+    current_segment = all_segments[-1] if all_segments else None
+
+    # ---- Top-5 ----
+    top5 = sorted(enumerate(lstm_scores), key=lambda x: x[1], reverse=True)[:5]
     top5_list = [
         {
             "gesture": GESTURE_NAMES_CN[i] if i < len(GESTURE_NAMES_CN) else "未知",
@@ -986,15 +1288,26 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
         for i, score in top5
     ]
 
-    # 注意: 摄像头流每帧都写日志会产生大量数据,
-    # 此处仅在检测到有效手势 (gesture_id > 0) 时写入云数据库
-    if gesture_id > 0:
+    # ---- 历史数组 (前端趋势) ----
+    recent_history = [
+        {
+            "gesture": GESTURE_NAMES_CN[item["gestureId"]] if item["gestureId"] < len(GESTURE_NAMES_CN) else "未知",
+            "gestureId": item["gestureId"],
+            "confidence": item["confidence"],
+            "validPose": item.get("validPose", True),
+            "poseQuality": item.get("poseQuality", 0.0),
+        }
+        for item in history[-10:]
+    ]
+
+    # ---- 写入云数据库 (新段确认时) ----
+    if best_gid > 0 and segment_changed:
         log_gesture_async(
             GestureLogEntry(
                 recognition_type="camera_stream",
-                gesture=gesture_cn,
-                gesture_id=gesture_id,
-                confidence=round(confidence, 4),
+                gesture=smoothed_gesture,
+                gesture_id=best_gid,
+                confidence=smoothed_conf,
                 inference_ms=round(elapsed * 1000, 1),
                 top5_json=build_top5_json(top5_list),
             )
@@ -1005,11 +1318,29 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
         "message": "success",
         "data": {
             "streamId": stream_id,
-            "gesture": gesture_cn,
-            "gestureId": gesture_id,
-            "confidence": round(confidence, 4),
-            "timestamp": int(time.time() * 1000),
+            "frameCount": fc,
+            "gesture": smoothed_gesture,            # 平滑后结果
+            "gestureId": best_gid,
+            "confidence": smoothed_conf,
+            "proposedGesture": GESTURE_NAMES_CN[proposed_gid] if proposed_gid < len(GESTURE_NAMES_CN) else "未知",
+            "proposedGestureId": proposed_gid,
+            "proposedConfidence": proposed_conf,
+            "rawGesture": GESTURE_NAMES_CN[lstm_gid] if lstm_gid < len(GESTURE_NAMES_CN) else "未知",
+            "rawGestureId": lstm_gid,
+            "rawConfidence": round(lstm_conf, 4),
+            "singleGesture": GESTURE_NAMES_CN[single_gid] if single_gid < len(GESTURE_NAMES_CN) else "未知",
+            "singleGestureId": single_gid,
+            "singleConfidence": round(single_conf, 4),
+            "timestamp": now_ms,
             "top5": top5_list,
             "inference_ms": round(elapsed * 1000, 1),
+            "poseQuality": pose_quality,
+            "validPose": bool(state_updated),
+            "history": recent_history,
+            "segments": all_segments,               # 所有已确认手势段
+            "currentSegment": current_segment,
+            "segmentChanged": segment_changed,
+            "stableChanged": stable_changed,
+            "warmup": fc <= STREAM_WARMUP_FRAMES,
         },
     }

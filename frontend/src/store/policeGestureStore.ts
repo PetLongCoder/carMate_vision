@@ -18,6 +18,12 @@ type Segment = {
 
 type StreamRecord = PoliceGestureResult & {
   inference_ms?: number;
+  validPose?: boolean;
+  poseQuality?: {
+    score?: number;
+    validUpperKeypoints?: number;
+    validArmKeypoints?: number;
+  };
 };
 
 interface PoliceGestureState {

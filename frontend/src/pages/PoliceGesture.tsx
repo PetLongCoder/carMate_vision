@@ -76,6 +76,12 @@ type SegmentSummary = {
 
 type StreamRecord = PoliceGestureResult & {
   inference_ms?: number;
+  validPose?: boolean;
+  poseQuality?: {
+    score?: number;
+    validUpperKeypoints?: number;
+    validArmKeypoints?: number;
+  };
 };
 
 type PendingUpload = {
@@ -85,8 +91,10 @@ type PendingUpload = {
 };
 
 const STREAM_ID = 'web-camera-police-gesture';
-const STREAM_INTERVAL_MS = 1200;
-const LIVE_LABEL_HOLD_SECONDS = 1.2;
+const STREAM_INTERVAL_MS = 200;   // 200ms = 5fps, 保证每个手势能采到足够帧
+const STREAM_FRAME_MAX_WIDTH = 768;
+const STREAM_JPEG_QUALITY = 0.84;
+const LIVE_LABEL_HOLD_SECONDS = 1.0;
 
 const getGestureLabel = (gestureId?: number, fallback?: string) => (
   gestureId === undefined ? '等待识别' : GESTURE_LABELS[gestureId] || fallback || '未知'
@@ -121,8 +129,6 @@ const PoliceGesture: React.FC = () => {
   const setFps = usePoliceGestureStore((s) => s.setFps);
   const setSampleFps = usePoliceGestureStore((s) => s.setSampleFps);
   const setFrames = usePoliceGestureStore((s) => s.setFrames);
-  const setSegments = usePoliceGestureStore((s) => s.setSegments);
-  const setInferenceMs = usePoliceGestureStore((s) => s.setInferenceMs);
 
   // 从 store 读取持久化的结果 (跨页面切换保留)
   const result = storeResult;
@@ -159,6 +165,7 @@ const PoliceGesture: React.FC = () => {
   const pendingUploadRef = useRef<PendingUpload | null>(null);
   const analysisStartedRef = useRef(false);
   const analysisStartTimerRef = useRef<number | undefined>(undefined);
+  const streamBusyRef = useRef(false);
 
   const segmentSummaries = useMemo<SegmentSummary[]>(() => {
     const summaries = new Map<number, SegmentSummary>();
@@ -378,6 +385,7 @@ const PoliceGesture: React.FC = () => {
       window.clearInterval(timerRef.current);
       timerRef.current = undefined;
     }
+    streamBusyRef.current = false;
     streamRef.current?.getTracks().forEach((track) => track.stop());
     streamRef.current = null;
     if (cameraRef.current) {
@@ -389,16 +397,19 @@ const PoliceGesture: React.FC = () => {
   }, []);
 
   const captureAndRecognize = useCallback(async () => {
-    if (!cameraRef.current || !canvasRef.current || streamBusy) return;
+    if (!cameraRef.current || !canvasRef.current || streamBusyRef.current) return;
     const video = cameraRef.current;
     if (!video.videoWidth || !video.videoHeight) return;
 
+    streamBusyRef.current = true;
     setStreamBusy(true);
     const canvas = canvasRef.current;
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
+    const scale = Math.min(1, STREAM_FRAME_MAX_WIDTH / video.videoWidth);
+    canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
     const ctx = canvas.getContext('2d');
     if (!ctx) {
+      streamBusyRef.current = false;
       setStreamBusy(false);
       return;
     }
@@ -406,6 +417,7 @@ const PoliceGesture: React.FC = () => {
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(async (blob) => {
       if (!blob) {
+        streamBusyRef.current = false;
         setStreamBusy(false);
         return;
       }
@@ -419,19 +431,29 @@ const PoliceGesture: React.FC = () => {
         console.error('stream frame failed:', error);
         message.warning('实时帧识别失败，请检查后端服务');
       } finally {
+        streamBusyRef.current = false;
         setStreamBusy(false);
       }
-    }, 'image/jpeg', 0.78);
-  }, [streamBusy]);
+    }, 'image/jpeg', STREAM_JPEG_QUALITY);
+  }, [storeAddStreamHistory, storeSetStreamResult]);
 
   const startCamera = async () => {
     try {
       await resetPoliceGestureStream(STREAM_ID);
       const media = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: 'environment' },
+        video: {
+          width: { ideal: 960 },
+          height: { ideal: 720 },
+          facingMode: 'environment',
+        },
         audio: false,
       });
       streamRef.current = media;
+      if (timerRef.current) {
+        window.clearInterval(timerRef.current);
+        timerRef.current = undefined;
+      }
+      streamBusyRef.current = false;
       if (cameraRef.current) {
         cameraRef.current.srcObject = media;
         await cameraRef.current.play();
@@ -453,6 +475,7 @@ const PoliceGesture: React.FC = () => {
       previewAbortRef.current?.abort();
       if (analysisStartTimerRef.current) window.clearTimeout(analysisStartTimerRef.current);
       if (timerRef.current) window.clearInterval(timerRef.current);
+      streamBusyRef.current = false;
       streamRef.current?.getTracks().forEach((track) => track.stop());
       if (videoUrlRef.current) URL.revokeObjectURL(videoUrlRef.current);
     };
@@ -790,6 +813,12 @@ const PoliceGesture: React.FC = () => {
               />
               <Descriptions size="small" column={1} style={{ marginTop: 16, textAlign: 'left' }}>
                 <Descriptions.Item label="推理耗时">{streamResult.inference_ms?.toFixed(0) || 0} ms</Descriptions.Item>
+                <Descriptions.Item label="姿态质量">
+                  {streamResult.poseQuality
+                    ? `${((streamResult.poseQuality.score || 0) * 100).toFixed(0)}%`
+                    : '-'}
+                  {streamResult.validPose === false ? '（未稳定捕获人体）' : ''}
+                </Descriptions.Item>
                 <Descriptions.Item label="输入类型">连续摄像头帧</Descriptions.Item>
                 <Descriptions.Item label="时序状态">LSTM 状态保持</Descriptions.Item>
               </Descriptions>
