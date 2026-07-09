@@ -136,7 +136,11 @@ def update_recognition_by_session(
     return record
 
 
-def history_record_to_dict(record: HistoryRecord) -> dict[str, Any]:
+def history_record_to_dict(
+    record: HistoryRecord,
+    *,
+    username: str | None = None,
+) -> dict[str, Any]:
     result: dict[str, Any] = {}
     if record.result_json:
         try:
@@ -159,6 +163,8 @@ def history_record_to_dict(record: HistoryRecord) -> dict[str, Any]:
 
     return {
         "id": record.id,
+        "user_id": record.user_id,
+        "username": username,
         "type": record.type,
         "module_label": TYPE_LABELS.get(record.type, record.type),
         "source_type": result.get("sourceType"),
