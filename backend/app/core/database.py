@@ -48,3 +48,16 @@ def ensure_wechat_columns():
         for column_name, ddl in migrations:
             if column_name not in existing:
                 conn.execute(text(ddl))
+
+    # history_records.session_id — 追踪会话历史记录的关联键
+    if "history_records" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("history_records")}
+        if "session_id" not in existing:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE history_records ADD COLUMN session_id VARCHAR(36) NULL"
+                ))
+                conn.execute(text(
+                    "CREATE INDEX ix_history_records_session_id "
+                    "ON history_records(session_id)"
+                ))

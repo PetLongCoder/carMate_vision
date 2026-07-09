@@ -44,6 +44,7 @@ class HistoryRecord(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     user_id: Mapped[int | None] = mapped_column(Integer, index=True)
     type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     image_url: Mapped[str | None] = mapped_column(String(500))
     result_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)

@@ -117,6 +117,12 @@ const PoliceGesture: React.FC = () => {
   const storeAddStreamHistory = usePoliceGestureStore((s) => s.addStreamHistory);
   const storeClearVideoResult = usePoliceGestureStore((s) => s.clearVideoResult);
   const storeClearStream = usePoliceGestureStore((s) => s.clearStream);
+  const setDuration = usePoliceGestureStore((s) => s.setDuration);
+  const setFps = usePoliceGestureStore((s) => s.setFps);
+  const setSampleFps = usePoliceGestureStore((s) => s.setSampleFps);
+  const setFrames = usePoliceGestureStore((s) => s.setFrames);
+  const setSegments = usePoliceGestureStore((s) => s.setSegments);
+  const setInferenceMs = usePoliceGestureStore((s) => s.setInferenceMs);
 
   // 从 store 读取持久化的结果 (跨页面切换保留)
   const result = storeResult;
