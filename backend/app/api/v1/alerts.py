@@ -1,42 +1,59 @@
-from fastapi import APIRouter, Query
 from typing import Optional
-from app.utils.logger import logger
+
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy.orm import Session
+
+from app.api.v1.auth import ok, require_admin
+from app.core.database import get_db
+from app.models.db_models import AlertRecord, User
 
 router = APIRouter()
 
 
-@router.get("/alerts")
-async def get_alerts(
-    page: Optional[int] = Query(1, ge=1),
-    pageSize: Optional[int] = Query(10, ge=1, le=100),
-    level: Optional[str] = None
-):
-    """
-    获取告警列表（占位）
-    前端对接文档: GET /api/alerts
-    """
-    logger.info(f"查询告警列表: page={page}, pageSize={pageSize}, level={level}")
-    # TODO: 从数据库查询告警
+def alert_to_dict(record: AlertRecord) -> dict:
     return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "list": [],
-            "total": 0
-        }
+        "id": record.id,
+        "level": record.level,
+        "title": record.title,
+        "summary": record.summary or "",
+        "source": record.source or "",
+        "createdAt": record.created_at.isoformat() if record.created_at else "",
+        "acknowledged": record.acknowledged,
     }
+
+
+@router.get("/alerts")
+def get_alerts(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
+    level: Optional[str] = None,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    query = db.query(AlertRecord)
+    if level:
+        query = query.filter(AlertRecord.level == level)
+
+    total = query.count()
+    records = (
+        query.order_by(AlertRecord.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return ok({"list": [alert_to_dict(item) for item in records], "total": total})
 
 
 @router.put("/alerts/{alert_id}/acknowledge")
-async def acknowledge_alert(alert_id: int):
-    """
-    确认告警（占位）
-    前端对接文档: PUT /api/alerts/{id}/acknowledge
-    """
-    logger.info(f"确认告警: id={alert_id}")
-    # TODO: 更新数据库告警状态
-    return {
-        "code": 200,
-        "message": "success",
-        "data": None
-    }
+def acknowledge_alert(
+    alert_id: int,
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    record = db.query(AlertRecord).filter(AlertRecord.id == alert_id).first()
+    if not record:
+        return {"code": 404, "message": "告警不存在", "data": None}
+
+    record.acknowledged = True
+    db.commit()
+    return ok(None)

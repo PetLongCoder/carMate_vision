@@ -1,45 +1,64 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.api.v1.auth import ok, require_admin
 from app.core.database import get_db
-from app.models.db_models import PoliceGestureLog
+from app.models.db_models import AlertRecord, PoliceGestureLog, RecognitionRecord, User
 from app.utils.logger import logger
 
 router = APIRouter()
 
 
 @router.get("/stats/dashboard")
-async def get_dashboard_stats(db: Session = Depends(get_db)):
-    """获取仪表盘统计数据 (含交警手势识别统计)"""
+def get_dashboard_stats(
+    _: User = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
     logger.info("查询仪表盘统计")
 
-    total_gestures = db.query(func.count(PoliceGestureLog.id)).scalar() or 0
-    success_gestures = (
-        db.query(func.count(PoliceGestureLog.id))
-        .filter(PoliceGestureLog.success == True)
+    total_plates = (
+        db.query(func.count(RecognitionRecord.id))
+        .filter(RecognitionRecord.type == "plate", RecognitionRecord.success.is_(True))
         .scalar()
         or 0
     )
-    # 今天识别数
-    from datetime import date
-    today = date.today()
+    total_gestures_records = (
+        db.query(func.count(RecognitionRecord.id))
+        .filter(
+            RecognitionRecord.type.in_(["police_gesture", "driver_gesture"]),
+            RecognitionRecord.success.is_(True),
+        )
+        .scalar()
+        or 0
+    )
+    total_police_logs = db.query(func.count(PoliceGestureLog.id)).scalar() or 0
+    success_police_logs = (
+        db.query(func.count(PoliceGestureLog.id))
+        .filter(PoliceGestureLog.success.is_(True))
+        .scalar()
+        or 0
+    )
     today_gestures = (
         db.query(func.count(PoliceGestureLog.id))
-        .filter(func.date(PoliceGestureLog.created_at) == today)
+        .filter(func.date(PoliceGestureLog.created_at) == date.today())
         .scalar()
         or 0
     )
+    total_alerts = db.query(func.count(AlertRecord.id)).scalar() or 0
+    unread_alerts = (
+        db.query(func.count(AlertRecord.id)).filter(AlertRecord.acknowledged.is_(False)).scalar() or 0
+    )
 
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "totalPlates": 0,  # TODO: 车牌识别统计
-            "totalGestures": total_gestures,
+    return ok(
+        {
+            "totalPlates": total_plates,
+            "totalGestures": total_gestures_records + total_police_logs,
             "todayGestures": today_gestures,
-            "successGestures": success_gestures,
-            "totalAlerts": 0,  # TODO: 告警统计
-            "unreadAlerts": 0,
-        },
-    }
+            "successGestures": success_police_logs,
+            "totalAlerts": total_alerts,
+            "unreadAlerts": unread_alerts,
+        }
+    )

@@ -16,9 +16,9 @@ class HandTracker:
                 num_hands=1
             )
             self.recognizer = vision.GestureRecognizer.create_from_options(options)
-            print("[OK] 官方手势模型加载成功！")
+            print("[HandTracker] gesture model loaded")
         except Exception as e:
-            print(f"[ERROR] 模型加载失败: {e}")
+            print(f"[HandTracker] model load failed: {e}")
             raise
 
         # 双轨迹缓存
@@ -167,7 +167,7 @@ class HandTracker:
             return output, confidence, landmarks
 
         except Exception as e:
-            print(f"⚠️ 处理帧时出错: {e}")
+            print(f"[HandTracker] frame error: {e}")
             return "unknown", 0.0, []
 
     def _detect_swipe(self) -> Tuple[str, float]:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import qrcode
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ from app.core.network import detect_lan_ip
 from app.core.security import hash_password
 from app.models.auth_schemas import AuthResponse, UserOut, WechatConfirmRequest, WechatPollResponse
 from app.models.db_models import User
+from app.services.operation_log_service import log_operation
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/auth/wechat", tags=["微信登录(Mock)"])
@@ -366,7 +367,7 @@ def wechat_confirm_page(state: str):
 
 
 @router.post("/confirm")
-def confirm_wechat_login(body: WechatConfirmRequest, db: Session = Depends(get_db)):
+def confirm_wechat_login(body: WechatConfirmRequest, request: Request, db: Session = Depends(get_db)):
     _ensure_enabled()
     session = _get_session(body.state)
     if not session:
@@ -401,6 +402,7 @@ def confirm_wechat_login(body: WechatConfirmRequest, db: Session = Depends(get_d
         session.user_payload = user_payload
         session.returned_openid = mock_openid
         logger.info(f"用户 {target.username} 解绑微信")
+        log_operation(db, action="unbind_wechat", user=target, success=True, request=request)
         return ok({"message": "微信解绑成功", "mock_openid": mock_openid, "user": user_payload})
 
     if session.mode == "rebind" and session.bind_user_id:
@@ -430,6 +432,7 @@ def confirm_wechat_login(body: WechatConfirmRequest, db: Session = Depends(get_d
         session.status = "confirmed"
         session.user_payload = user_payload
         logger.info(f"用户 {target.username} 换绑微信: {mock_openid}")
+        log_operation(db, action="rebind_wechat", user=target, success=True, request=request, detail={"mock_openid": mock_openid})
         return ok({"message": "微信换绑成功", "mock_openid": mock_openid, "user": user_payload})
 
     if session.mode == "bind" and session.bind_user_id:
@@ -443,6 +446,7 @@ def confirm_wechat_login(body: WechatConfirmRequest, db: Session = Depends(get_d
         session.status = "confirmed"
         session.user_payload = user_payload
         session.returned_openid = mock_openid
+        log_operation(db, action="bind_wechat", user=result, success=True, request=request, detail={"mock_openid": mock_openid})
         return ok(
             {
                 "message": "微信绑定成功",
@@ -459,6 +463,7 @@ def confirm_wechat_login(body: WechatConfirmRequest, db: Session = Depends(get_d
     session.returned_openid = mock_openid
 
     logger.info(f"Mock 微信扫码确认: {user.username} (state={body.state})")
+    log_operation(db, action="login_wechat", user=user, success=True, request=request, detail={"mock_openid": mock_openid})
     return ok(
         {
             "message": "登录确认成功",

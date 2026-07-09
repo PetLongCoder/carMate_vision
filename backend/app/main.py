@@ -16,6 +16,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import (
+    admin_logs,
     auth,
     driver_gesture,
     plate,
@@ -77,6 +78,7 @@ app.add_middleware(
 
 # 注册所有路由 (统一前缀 /api)
 app.include_router(auth.router, prefix="/api", tags=["用户认证"])
+app.include_router(admin_logs.router, prefix="/api", tags=["管理员"])
 app.include_router(wechat.router, prefix="/api", tags=["微信登录(Mock)"])
 app.include_router(driver_gesture.router, prefix="/api", tags=["车主手势控车"])
 app.include_router(plate.router, prefix="/api", tags=["车牌识别"])

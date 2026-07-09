@@ -48,7 +48,7 @@ const Login: React.FC = () => {
   const handlePasswordLogin = async (values: { username: string; password: string }) => {
     setLoading(true);
     try {
-      finishLogin(await login(values));
+      finishLogin(await login({ ...values, portal: activeRole }));
     } catch (err) {
       notifyAuthError(err, navigate);
     } finally {

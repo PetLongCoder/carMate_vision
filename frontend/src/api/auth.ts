@@ -123,6 +123,14 @@ function mockLogin(data: LoginRequest): AuthResponse {
     throw new Error('密码错误');
   }
 
+  const portal = data.portal ?? 'user';
+  if (portal === 'user' && found.role === 'admin') {
+    throw new Error('请使用管理员登录入口');
+  }
+  if (portal === 'admin' && found.role !== 'admin') {
+    throw new Error('该账号不是管理员');
+  }
+
   const { password: _, ...user } = found;
   return toAuthResponse(user);
 }
