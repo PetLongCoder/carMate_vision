@@ -192,7 +192,7 @@ async def start_stream_tracking(
     from app.services.video_processor import run_video_session
     asyncio.create_task(run_video_session(session))
 
-    logger.info("流追踪会话已创建: %s, URL: %s", session.session_id, url)
+    logger.info(f"流追踪会话已创建: {session.session_id}, URL: {url}")
 
     return {
         "code": 200,

@@ -81,7 +81,7 @@ async def _run_detection(
     try:
         results, annotated = await asyncio.to_thread(processor.process_frame, frame, fps)
     except Exception as exc:
-        logger.warning("检测帧 %d 异常: %s", frame_idx, exc)
+        logger.warning(f"检测帧 {frame_idx} 异常: {exc}")
         return
 
     if results:
@@ -128,7 +128,7 @@ async def _run_stream_loop(
     session.fps = fps
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
-    logger.info("流 %s 已连接: %dx%d @ %.1f fps", session.session_id, width, height, fps)
+    logger.info(f"流 {session.session_id} 已连接: {width}x{height} @ {fps:.1f} fps")
 
     while True:
         try:
