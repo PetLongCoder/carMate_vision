@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   Alert,
   Button,
@@ -25,6 +25,7 @@ import {
   resetPoliceGestureStream,
   streamPoliceGestureVideo,
 } from '../api';
+import { usePoliceGestureStore } from '../store/policeGestureStore';
 
 const GESTURE_LABELS: Record<number, string> = {
   0: '无手势',
@@ -98,25 +99,47 @@ const getGestureColor = (gestureId?: number) => (
 const formatSeconds = (seconds: number) => `${seconds.toFixed(1)}s`;
 
 const PoliceGesture: React.FC = () => {
-  const [result, setResult] = useState<PoliceGestureResult | null>(null);
-  const [top5, setTop5] = useState<Array<{ gesture: string; gestureId: number; confidence: number }>>([]);
-  const [videoSrc, setVideoSrc] = useState<string | null>(null);
-  const [videoFileName, setVideoFileName] = useState('');
-  const [videoError, setVideoError] = useState('');
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [inferenceMs, setInferenceMs] = useState<number>(0);
-  const [frames, setFrames] = useState<FrameResult[]>([]);
-  const [segments, setSegments] = useState<Segment[]>([]);
-  const [duration, setDuration] = useState<number>(0);
-  const [fps, setFps] = useState<number>(0);
-  const [sampleFps, setSampleFps] = useState<number>(0);
-  const [playbackTime, setPlaybackTime] = useState(0);
-  const [streaming, setStreaming] = useState(false);
-  const [streamResult, setStreamResult] = useState<StreamRecord | null>(null);
-  const [streamHistory, setStreamHistory] = useState<StreamRecord[]>([]);
-  const [streamBusy, setStreamBusy] = useState(false);
+  // ---- 从 Zustand store 读取/写入识别结果 (切换页面不丢失) ----
+  const storeResult = usePoliceGestureStore((s) => s.result);
+  const storeTop5 = usePoliceGestureStore((s) => s.top5);
+  const storeFrames = usePoliceGestureStore((s) => s.frames);
+  const storeSegments = usePoliceGestureStore((s) => s.segments);
+  const storeDuration = usePoliceGestureStore((s) => s.duration);
+  const storeFps = usePoliceGestureStore((s) => s.fps);
+  const storeSampleFps = usePoliceGestureStore((s) => s.sampleFps);
+  const storeInferenceMs = usePoliceGestureStore((s) => s.inferenceMs);
+  const storeVideoFileName = usePoliceGestureStore((s) => s.videoFileName);
+  const storeStreamResult = usePoliceGestureStore((s) => s.streamResult);
+  const storeStreamHistory = usePoliceGestureStore((s) => s.streamHistory);
+  const storeSetVideoResult = usePoliceGestureStore((s) => s.setVideoResult);
+  const storeSetVideoFileName = usePoliceGestureStore((s) => s.setVideoFileName);
+  const storeSetStreamResult = usePoliceGestureStore((s) => s.setStreamResult);
+  const storeAddStreamHistory = usePoliceGestureStore((s) => s.addStreamHistory);
+  const storeClearVideoResult = usePoliceGestureStore((s) => s.clearVideoResult);
+  const storeClearStream = usePoliceGestureStore((s) => s.clearStream);
+
+  // 从 store 读取持久化的结果 (跨页面切换保留)
+  const result = storeResult;
+  const top5 = storeTop5;
+  const frames = storeFrames;
+  const segments = storeSegments;
+  const duration = storeDuration;
+  const fps = storeFps;
+  const sampleFps = storeSampleFps;
+  const inferenceMs = storeInferenceMs;
+  const videoFileName = storeVideoFileName;
+  const streamResult = storeStreamResult;
+  const streamHistory = storeStreamHistory;
+
+  // ---- 组件本地状态 (不需要跨页面保留) ----
+  const [videoSrc, setVideoSrc] = React.useState<string | null>(null);
+  const [videoError, setVideoError] = React.useState('');
+  const [previewLoading, setPreviewLoading] = React.useState(false);
+  const [loading, setLoading] = React.useState(false);
+  const [progress, setProgress] = React.useState(0);
+  const [playbackTime, setPlaybackTime] = React.useState(0);
+  const [streaming, setStreaming] = React.useState(false);
+  const [streamBusy, setStreamBusy] = React.useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
@@ -224,19 +247,22 @@ const PoliceGesture: React.FC = () => {
               sample_fps?: number;
             };
             setProgress(100);
-            setResult({
-              gesture: doneData.gesture,
-              gestureId: doneData.gestureId,
-              confidence: doneData.confidence,
-              timestamp: doneData.timestamp,
+            // 持久化到 Zustand store (切换页面不丢失)
+            storeSetVideoResult({
+              result: {
+                gesture: doneData.gesture,
+                gestureId: doneData.gestureId,
+                confidence: doneData.confidence,
+                timestamp: doneData.timestamp,
+              },
+              top5: doneData.top5 || [],
+              frames: doneData.frames || [],
+              segments: doneData.segments || [],
+              duration: doneData.video_duration || videoRef.current?.duration || 0,
+              fps: doneData.video_fps || 0,
+              sampleFps: doneData.sample_fps || 0,
+              inferenceMs: doneData.inference_ms || 0,
             });
-            setTop5(doneData.top5 || []);
-            setInferenceMs(doneData.inference_ms || 0);
-            setFrames(doneData.frames || []);
-            setSegments(doneData.segments || []);
-            setDuration(doneData.video_duration || videoRef.current?.duration || 0);
-            setFps(doneData.video_fps || 0);
-            setSampleFps(doneData.sample_fps || 0);
             message.success(`识别完成：${getGestureLabel(doneData.gestureId, doneData.gesture)}`);
             return;
           }
@@ -313,16 +339,9 @@ const PoliceGesture: React.FC = () => {
 
     setLoading(true);
     setProgress(0);
-    setResult(null);
-    setTop5([]);
-    setFrames([]);
-    setSegments([]);
-    setInferenceMs(0);
-    setDuration(0);
-    setFps(0);
-    setSampleFps(0);
+    storeClearVideoResult();
     setPlaybackTime(0);
-    setVideoFileName(file.name);
+    storeSetVideoFileName(file.name);
     setVideoError('');
     setPreviewLoading(false);
 
@@ -388,8 +407,8 @@ const PoliceGesture: React.FC = () => {
       try {
         const response = await recognizePoliceGestureFrame(blob, STREAM_ID);
         const data = ((response.data as any).data || response.data) as StreamRecord;
-        setStreamResult(data);
-        setStreamHistory((items) => [data, ...items].slice(0, 10));
+        storeSetStreamResult(data);
+        storeAddStreamHistory(data);
       } catch (error) {
         console.error('stream frame failed:', error);
         message.warning('实时帧识别失败，请检查后端服务');
@@ -411,8 +430,7 @@ const PoliceGesture: React.FC = () => {
         cameraRef.current.srcObject = media;
         await cameraRef.current.play();
       }
-      setStreamResult(null);
-      setStreamHistory([]);
+      storeClearStream();
       setStreaming(true);
       timerRef.current = window.setInterval(captureAndRecognize, STREAM_INTERVAL_MS);
       window.setTimeout(captureAndRecognize, 300);

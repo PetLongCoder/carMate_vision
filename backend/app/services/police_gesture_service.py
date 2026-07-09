@@ -15,6 +15,7 @@ import logging
 import json
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import Optional, Generator, Any
 
@@ -23,6 +24,13 @@ import numpy as np
 from PIL import Image
 
 from app.utils.logger import logger
+from app.services.police_gesture_logger import (
+    GestureLogEntry,
+    log_gesture_async,
+    log_gestures_batch_async,
+    build_top5_json,
+    build_segments_json,
+)
 
 # ---- 将 ctpgr 加入路径 ----
 _CTPGR_DIR = Path(__file__).parent.parent.parent / "ctpgr"
@@ -623,6 +631,18 @@ def process_police_gesture_image(contents: bytes, timestamp: Optional[int] = Non
         elapsed * 1000,
     )
 
+    # 异步写入云数据库日志
+    log_gesture_async(
+        GestureLogEntry(
+            recognition_type="image",
+            gesture=gesture_cn,
+            gesture_id=gesture_id,
+            confidence=round(confidence, 4),
+            inference_ms=round(elapsed * 1000, 1),
+            top5_json=build_top5_json(top5_list),
+        )
+    )
+
     return {
         "code": 200,
         "message": "success",
@@ -641,10 +661,12 @@ def process_police_gesture_image(contents: bytes, timestamp: Optional[int] = Non
 #  Video processing
 # ═══════════════════════════════════════════════════════════════
 
-def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Optional[int] = None) -> dict:
+def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Optional[int] = None, filename: Optional[str] = None) -> dict:
     """处理视频文件，返回逐帧识别结果"""
     if timestamp is None:
         timestamp = int(time.time() * 1000)
+
+    video_session_id = str(uuid.uuid4())  # 本次视频的唯一标识
 
     with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
         tmp.write(contents)
@@ -712,6 +734,48 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
             elapsed * 1000,
         )
 
+        # 异步写入云数据库日志: 每个手势段单独记录一条
+        segments = result.get("segments", [])
+        if segments:
+            segment_entries = [
+                GestureLogEntry(
+                    recognition_type="video",
+                    gesture=seg["gesture"],
+                    gesture_id=seg["gestureId"],
+                    confidence=result["confidence"],
+                    inference_ms=round(elapsed * 1000, 1),
+                    filename=filename,
+                    video_session_id=video_session_id,
+                    top5_json=build_top5_json(result.get("top5", [])),
+                    frames_total=total_frames,
+                    frames_processed=processed,
+                    video_fps=round(fps, 1),
+                    video_duration=round(duration, 1),
+                    segments_json=build_segments_json([seg]),
+                )
+                for seg in segments
+            ]
+            log_gestures_batch_async(segment_entries)
+        else:
+            # 没有手势段时仍记录一条汇总日志
+            log_gesture_async(
+                GestureLogEntry(
+                    recognition_type="video",
+                    gesture=result["gesture"],
+                    gesture_id=result["gestureId"],
+                    confidence=result["confidence"],
+                    inference_ms=round(elapsed * 1000, 1),
+                    filename=filename,
+                    video_session_id=video_session_id,
+                    top5_json=build_top5_json(result.get("top5", [])),
+                    frames_total=total_frames,
+                    frames_processed=processed,
+                    video_fps=round(fps, 1),
+                    video_duration=round(duration, 1),
+                    segments_json=build_segments_json([]),
+                )
+            )
+
         return {"code": 200, "message": "success", "data": result}
     finally:
         os.unlink(tmp_path)
@@ -721,9 +785,10 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
 #  Video stream processing (SSE generator)
 # ═══════════════════════════════════════════════════════════════
 
-def generate_police_gesture_video_stream(contents: bytes, file_ext: str) -> Generator[str, None, None]:
+def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filename: Optional[str] = None) -> Generator[str, None, None]:
     """视频流式识别生成器: 边分析边产生 SSE 事件"""
     timestamp = int(time.time() * 1000)
+    video_session_id = str(uuid.uuid4())  # 本次视频的唯一标识
 
     with tempfile.NamedTemporaryFile(suffix=file_ext, delete=False) as tmp:
         tmp.write(contents)
@@ -808,9 +873,65 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str) -> Gene
             len(result["segments"]),
             elapsed * 1000,
         )
+
+        # 异步写入云数据库日志: 每个手势段单独记录一条
+        segments = result.get("segments", [])
+        if segments:
+            segment_entries = [
+                GestureLogEntry(
+                    recognition_type="video_stream",
+                    gesture=seg["gesture"],
+                    gesture_id=seg["gestureId"],
+                    confidence=result["confidence"],
+                    inference_ms=round(elapsed * 1000, 1),
+                    filename=filename,
+                    video_session_id=video_session_id,
+                    top5_json=build_top5_json(result.get("top5", [])),
+                    frames_total=total_frames,
+                    frames_processed=processed,
+                    video_fps=round(fps, 1),
+                    video_duration=round(duration, 1),
+                    segments_json=build_segments_json([seg]),
+                )
+                for seg in segments
+            ]
+            log_gestures_batch_async(segment_entries)
+        else:
+            log_gesture_async(
+                GestureLogEntry(
+                    recognition_type="video_stream",
+                    gesture=result["gesture"],
+                    gesture_id=result["gestureId"],
+                    confidence=result["confidence"],
+                    inference_ms=round(elapsed * 1000, 1),
+                    filename=filename,
+                    video_session_id=video_session_id,
+                    top5_json=build_top5_json(result.get("top5", [])),
+                    frames_total=total_frames,
+                    frames_processed=processed,
+                    video_fps=round(fps, 1),
+                    video_duration=round(duration, 1),
+                    segments_json=build_segments_json([]),
+                )
+            )
+
         yield _sse_event("done", result)
     except Exception as e:
         logger.exception("交警手势流式视频识别失败: %s", e)
+        # 异步写入失败日志到云数据库
+        log_gesture_async(
+            GestureLogEntry(
+                recognition_type="video_stream",
+                gesture="未知",
+                gesture_id=-1,
+                confidence=0.0,
+                inference_ms=0.0,
+                success=False,
+                filename=filename,
+                video_session_id=video_session_id,
+                error_message=str(e),
+            )
+        )
         yield _sse_event("error", {"message": str(e)})
     finally:
         if cap is not None:
@@ -864,6 +985,20 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
         }
         for i, score in top5
     ]
+
+    # 注意: 摄像头流每帧都写日志会产生大量数据,
+    # 此处仅在检测到有效手势 (gesture_id > 0) 时写入云数据库
+    if gesture_id > 0:
+        log_gesture_async(
+            GestureLogEntry(
+                recognition_type="camera_stream",
+                gesture=gesture_cn,
+                gesture_id=gesture_id,
+                confidence=round(confidence, 4),
+                inference_ms=round(elapsed * 1000, 1),
+                top5_json=build_top5_json(top5_list),
+            )
+        )
 
     return {
         "code": 200,
