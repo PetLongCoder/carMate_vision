@@ -30,6 +30,7 @@ from app.core.database import SessionLocal, init_db
 from app.api.v1.auth import seed_default_users
 from app.services.session_manager import (
     SessionStatus,
+    SessionType,
     session_manager,
 )
 from app.services.video_processor import run_video_session
@@ -230,6 +231,11 @@ async def ws_plate_track(websocket: WebSocket, session_id: str):
     finally:
         reader_task.cancel()
         await session.unregister_ws(queue)
+        # 流会话: 所有 WebSocket 断开后自动停止
+        if session.type == SessionType.STREAM and session.ws_count == 0:
+            if session.status in (SessionStatus.PENDING, SessionStatus.PROCESSING):
+                logger.info(f"流会话 {session_id}: WebSocket 已全部断开, 自动停止")
+                session.update_status(SessionStatus.STOPPED, "前端页面刷新/关闭")
 
 
 # ═══════════════════════════════════════════════════════════
