@@ -47,6 +47,12 @@ interface PoliceGestureState {
     sampleFps: number;
     inferenceMs: number;
   }) => void;
+  setDuration: (d: number) => void;
+  setFps: (f: number) => void;
+  setSampleFps: (f: number) => void;
+  setFrames: (frames: FrameResult[] | ((prev: FrameResult[]) => FrameResult[])) => void;
+  setSegments: (segments: Segment[]) => void;
+  setInferenceMs: (ms: number) => void;
   setVideoFileName: (name: string) => void;
   setStreamResult: (result: StreamRecord) => void;
   addStreamHistory: (record: StreamRecord) => void;
@@ -80,6 +86,15 @@ export const usePoliceGestureStore = create<PoliceGestureState>((set) => ({
     }),
 
   setVideoFileName: (name) => set({ videoFileName: name }),
+  setDuration: (d) => set({ duration: d }),
+  setFps: (f) => set({ fps: f }),
+  setSampleFps: (f) => set({ sampleFps: f }),
+  setFrames: (frames) =>
+    set((state) => ({
+      frames: typeof frames === 'function' ? (frames as (prev: FrameResult[]) => FrameResult[])(state.frames) : frames,
+    })),
+  setSegments: (segments) => set({ segments }),
+  setInferenceMs: (ms) => set({ inferenceMs: ms }),
 
   setStreamResult: (result) => set({ streamResult: result }),
 

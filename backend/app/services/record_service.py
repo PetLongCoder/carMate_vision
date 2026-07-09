@@ -51,30 +51,36 @@ def log_recognition(
     result: dict[str, Any] | list[Any] | None = None,
     file_name: str | None = None,
     source_type: str | None = None,
+    session_id: str | None = None,
     user: User | None = None,
-) -> None:
+) -> HistoryRecord:
     payload: dict[str, Any] = {}
     if isinstance(result, dict):
         payload = dict(result)
     elif isinstance(result, list):
         payload = {"items": result}
+    # 剥离逐帧数据（太大，TEXT存不下，历史记录也不需要）
+    payload.pop("frames", None)
+    payload.pop("segments", None)
     if file_name:
         payload["fileName"] = file_name
     if source_type:
         payload["sourceType"] = source_type
+    if session_id:
+        payload["sessionId"] = session_id
     payload["success"] = success
     if summary:
         payload["summary"] = summary
 
     user_id = user.id if user else None
-    db.add(
-        HistoryRecord(
-            user_id=user_id,
-            type=record_type,
-            image_url="",
-            result_json=json.dumps(payload, ensure_ascii=False) if payload else None,
-        )
+    record = HistoryRecord(
+        user_id=user_id,
+        type=record_type,
+        session_id=session_id,
+        image_url="",
+        result_json=json.dumps(payload, ensure_ascii=False) if payload else None,
     )
+    db.add(record)
     db.add(
         RecognitionRecord(
             user_id=user_id,
@@ -85,6 +91,49 @@ def log_recognition(
         )
     )
     db.commit()
+    return record
+
+
+def update_recognition_by_session(
+    db: Session,
+    session_id: str,
+    final_result: dict[str, Any],
+    success: bool,
+    summary: str,
+) -> HistoryRecord | None:
+    """根据 session_id 更新追踪会话的历史记录，写入最终车牌结果。"""
+    record = db.query(HistoryRecord).filter(
+        HistoryRecord.session_id == session_id
+    ).first()
+    if record is None:
+        return None
+
+    existing: dict[str, Any] = {}
+    if record.result_json:
+        try:
+            existing = json.loads(record.result_json)
+        except json.JSONDecodeError:
+            existing = {}
+
+    existing.update(final_result)
+    # 剥离逐帧数据（TEXT存不下）
+    existing.pop("frames", None)
+    existing.pop("segments", None)
+    existing["success"] = success
+    existing["summary"] = summary
+    record.result_json = json.dumps(existing, ensure_ascii=False)
+
+    db.add(
+        RecognitionRecord(
+            user_id=record.user_id,
+            type=record.type,
+            result_summary=summary[:255] if summary else None,
+            confidence=extract_confidence(final_result),
+            success=success,
+        )
+    )
+    db.commit()
+    return record
 
 
 def history_record_to_dict(record: HistoryRecord) -> dict[str, Any]:

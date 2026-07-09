@@ -175,6 +175,7 @@ async def track_video(
             "totalFrames": total_frames,
         },
         file_name=file.filename,
+        session_id=session.session_id,
         user=user,
     )
 
@@ -200,6 +201,8 @@ async def track_video(
 async def start_stream_tracking(
     url: str = Form(...),
     name: str = Form(""),
+    user: User | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ):
     """
     启动流媒体追踪 (POST /api/plate/stream/start)
@@ -229,6 +232,23 @@ async def start_stream_tracking(
 
     # 创建会话
     session = await session_manager.create_session(SessionType.STREAM, url)
+
+    # 写入历史记录（先写记录，再启动后台任务，避免竞态）
+    log_recognition(
+        db,
+        record_type="plate",
+        source_type="stream",
+        success=True,
+        summary=f"流追踪 {name or url}",
+        result={
+            "sessionId": session.session_id,
+            "url": url,
+            "name": name or url,
+        },
+        file_name=name or None,
+        session_id=session.session_id,
+        user=user,
+    )
 
     # 在后台启动处理任务
     from app.services.video_processor import run_video_session

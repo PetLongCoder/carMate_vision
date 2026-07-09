@@ -44,6 +44,9 @@ async def run_video_session(
         summary = _build_tracking_summary(session)
         await session.broadcast(summary)
 
+        # 保存最终追踪结果到历史记录
+        _save_tracking_summary_to_db(session, summary)
+
     except Exception as exc:
         logger.exception(f"会话 {session.session_id} 异常: {exc}")
         session.update_status(SessionStatus.ERROR, str(exc))
@@ -244,6 +247,36 @@ def _build_tracking_summary(session: TrackingSession) -> dict:
         "duration": round(session.processed_frames / session.fps, 2) if session.fps > 0 else 0,
         "plates": plates,
     }
+
+
+def _save_tracking_summary_to_db(session: TrackingSession, summary: dict) -> None:
+    """追踪/流完成后，将最终车牌结果保存到历史记录。"""
+    from app.core.database import SessionLocal
+    from app.services.record_service import build_plate_summary, update_recognition_by_session
+
+    plates = summary.get("plates", [])
+    plate_summary = build_plate_summary(plates) if plates else "未识别到车牌"
+
+    db = SessionLocal()
+    try:
+        update_recognition_by_session(
+            db,
+            session_id=session.session_id,
+            final_result={
+                "plates": plates,
+                "totalFrames": summary.get("totalFrames", 0),
+                "processedFrames": summary.get("processedFrames", 0),
+                "duration": summary.get("duration", 0),
+                "sourceType": "stream" if session.type == SessionType.STREAM else "track",
+            },
+            success=True,
+            summary=plate_summary,
+        )
+    except Exception as exc:
+        logger.warning(f"保存追踪结果到历史记录失败 [{session.session_id}]: {exc}")
+        db.rollback()
+    finally:
+        db.close()
 
 
 async def _delayed_cleanup(session_id: str, delay: int = 60):

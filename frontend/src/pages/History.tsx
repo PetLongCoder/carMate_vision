@@ -28,6 +28,21 @@ import type { HistoryRecord, HistoryTypeOption } from '../types';
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
 
+const plateColorMap: Record<string, { color: string; label: string }> = {
+  blue: { color: 'blue', label: '蓝牌' },
+  green: { color: 'green', label: '绿牌' },
+  yellow: { color: 'orange', label: '黄牌' },
+  white: { color: 'default', label: '白牌' },
+  black: { color: 'default', label: '黑牌' },
+};
+
+function formatTime(seconds: number | undefined | null): string {
+  if (seconds == null) return '-';
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return m > 0 ? `${m}分${s.toFixed(1)}秒` : `${s.toFixed(1)}秒`;
+}
+
 const typeConfig = {
   plate: { color: 'blue' as const, icon: <CameraOutlined />, label: '车牌识别' },
   police_gesture: { color: 'purple' as const, icon: <HighlightOutlined />, label: '交警手势' },
@@ -57,6 +72,27 @@ function getResultText(record: HistoryRecord): string {
   }
   return '-';
 }
+
+const platesDrawerColumns = [
+  { title: '车牌号', dataIndex: 'plateNo', key: 'plateNo', width: 130,
+    render: (v: string) => <Tag color="blue" style={{ fontSize: 14 }}>{v}</Tag> },
+  { title: '颜色', dataIndex: 'color', key: 'color', width: 80,
+    render: (v: string) => {
+      const cfg = plateColorMap[v];
+      return cfg ? <Tag color={cfg.color}>{cfg.label}</Tag> : <Tag>{v || '-'}</Tag>;
+    }},
+  { title: '置信度', dataIndex: 'confidence', key: 'confidence', width: 90,
+    render: (v: number) => v != null ? `${(v * 100).toFixed(0)}%` : '-' },
+  { title: '车辆类型', dataIndex: 'vehicleType', key: 'vehicleType', width: 100,
+    render: (v: string) => {
+      const map: Record<string, string> = { car: '🚗 轿车', bus: '🚌 客车', truck: '🚛 货车' };
+      return map[v] || v || '-';
+    }},
+  { title: '首次出现', dataIndex: 'firstSeen', key: 'firstSeen', width: 120,
+    render: (v: number) => formatTime(v) },
+  { title: '最后出现', dataIndex: 'lastSeen', key: 'lastSeen', width: 120,
+    render: (v: number | null) => v != null ? formatTime(v) : '-' },
+];
 
 const History: React.FC = () => {
   const [loading, setLoading] = useState(false);
@@ -257,45 +293,69 @@ const History: React.FC = () => {
         />
       </Card>
 
-      <Drawer title="识别详情" open={!!selected} onClose={() => setSelected(null)} width={520}>
-        {selected && (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <div>
-              <Text type="secondary">类型</Text>
-              <div>{selected.module_label || selected.type}</div>
-            </div>
-            <div>
-              <Text type="secondary">来源</Text>
-              <div>{selected.source_label || selected.source_type || '-'}</div>
-            </div>
-            <div>
-              <Text type="secondary">结果</Text>
-              <div>{getResultText(selected)}</div>
-            </div>
-            <div>
-              <Text type="secondary">文件名</Text>
-              <div>{selected.file_name || '-'}</div>
-            </div>
-            <div>
-              <Text type="secondary">时间</Text>
-              <div>{dayjs(selected.createdAt).format('YYYY-MM-DD HH:mm:ss')}</div>
-            </div>
-            <div>
-              <Text type="secondary">完整数据</Text>
-              <pre
-                style={{
-                  background: '#f5f5f5',
-                  padding: 12,
-                  borderRadius: 8,
-                  overflow: 'auto',
-                  maxHeight: 360,
-                }}
-              >
-                {JSON.stringify(selected.result, null, 2)}
-              </pre>
-            </div>
-          </Space>
-        )}
+      <Drawer title="识别详情" open={!!selected} onClose={() => setSelected(null)} width={640}>
+        {selected && (() => {
+          const plates = (selected.result?.plates as Array<Record<string, unknown>> | undefined)
+            ?? (selected.result?.items as Array<Record<string, unknown>> | undefined);
+          const isPlateType = selected.type === 'plate';
+          return (
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <div>
+                <Text type="secondary">类型</Text>
+                <div>{selected.module_label || selected.type}</div>
+              </div>
+              <div>
+                <Text type="secondary">来源</Text>
+                <div>{selected.source_label || selected.source_type || '-'}</div>
+              </div>
+              <div>
+                <Text type="secondary">文件名</Text>
+                <div>{selected.file_name || '-'}</div>
+              </div>
+              <div>
+                <Text type="secondary">时间</Text>
+                <div>{dayjs(selected.createdAt).format('YYYY-MM-DD HH:mm:ss')}</div>
+              </div>
+
+              {isPlateType && plates && plates.length > 0 ? (
+                <>
+                  <div>
+                    <Text type="secondary">识别结果（共 {plates.length} 个车牌）</Text>
+                  </div>
+                  <Table
+                    columns={platesDrawerColumns}
+                    dataSource={plates as Record<string, unknown>[]}
+                    rowKey={(_, idx) => String(idx)}
+                    pagination={false}
+                    size="small"
+                    bordered
+                  />
+                </>
+              ) : isPlateType && plates && plates.length === 0 ? (
+                <div>
+                  <Text type="secondary">识别结果</Text>
+                  <div><Tag>未识别到车牌</Tag></div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <Text type="secondary">结果摘要</Text>
+                    <div>{getResultText(selected)}</div>
+                  </div>
+                  <div>
+                    <Text type="secondary">完整数据</Text>
+                    <pre style={{
+                      background: '#f5f5f5', padding: 12, borderRadius: 8,
+                      overflow: 'auto', maxHeight: 360,
+                    }}>
+                      {JSON.stringify(selected.result, null, 2)}
+                    </pre>
+                  </div>
+                </>
+              )}
+            </Space>
+          );
+        })()}
       </Drawer>
     </div>
   );
