@@ -3,14 +3,16 @@ import tempfile
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
+from app.api.v1.auth import get_current_user
 from app.core.database import get_db
-from app.models.db_models import PoliceGestureLog
+from app.models.db_models import PoliceGestureLog, User
+from app.services.record_service import build_gesture_summary, log_recognition
 from app.utils.logger import logger
 from app.services.police_gesture_service import (
     GESTURE_NAMES_CN,
@@ -55,19 +57,56 @@ async def health_check():
 
 
 @router.post("/police-gesture/recognize")
-async def recognize_police_gesture(file: UploadFile = File(...)):
+async def recognize_police_gesture(
+    file: UploadFile = File(...),
+    request: Request = None,
+    user: User | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """交警手势识别 - 支持图片或视频。"""
     ensure_police_gesture_model_loaded()
     contents = await file.read()
     file_ext = Path(file.filename or "image.jpg").suffix.lower()
     timestamp = int(time.time() * 1000)
+    is_video = file_ext in VIDEO_EXTENSIONS
     try:
-        if file_ext in VIDEO_EXTENSIONS:
-            return process_police_gesture_video(contents, file_ext, timestamp, filename=file.filename)
-        return process_police_gesture_image(contents, timestamp)
+        if is_video:
+            response = process_police_gesture_video(contents, file_ext, timestamp, filename=file.filename)
+        else:
+            response = process_police_gesture_image(contents, timestamp)
+        data = response.get("data", {}) if isinstance(response, dict) else {}
+        log_recognition(
+            db,
+            record_type="police_gesture",
+            source_type="video" if is_video else "image",
+            success=True,
+            summary=build_gesture_summary(data),
+            result=data,
+            file_name=file.filename,
+            user=user,
+        )
+        return response
     except ValueError as e:
+        log_recognition(
+            db,
+            record_type="police_gesture",
+            source_type="video" if is_video else "image",
+            success=False,
+            summary=str(e),
+            file_name=file.filename,
+            user=user,
+        )
         raise HTTPException(400, str(e))
     except Exception as exc:
+        log_recognition(
+            db,
+            record_type="police_gesture",
+            source_type="video" if is_video else "image",
+            success=False,
+            summary="识别失败",
+            file_name=file.filename,
+            user=user,
+        )
         logger.exception(f"交警手势识别失败: {exc}")
         log_gesture_async(
             GestureLogEntry(

@@ -7,6 +7,7 @@ import {
   HighlightOutlined,
   AimOutlined,
   AlertOutlined,
+  AuditOutlined,
   HistoryOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -33,6 +34,7 @@ const allMenuItems: Array<{
   { key: '/police-gesture', icon: <HighlightOutlined />, label: '交警手势', roles: ['user', 'admin'] },
   { key: '/driver-gesture', icon: <AimOutlined />, label: '车主手势', roles: ['user', 'admin'] },
   { key: '/alerts', icon: <AlertOutlined />, label: '告警中心', roles: ['admin'] },
+  { key: '/admin/operation-logs', icon: <AuditOutlined />, label: '用户操作日志', roles: ['admin'] },
   { key: '/history', icon: <HistoryOutlined />, label: '历史记录', roles: ['user', 'admin'] },
 ];
 

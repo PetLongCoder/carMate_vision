@@ -10,6 +10,7 @@ import PlateRecognition from './pages/PlateRecognition';
 import PoliceGesture from './pages/PoliceGesture';
 import DriverGesture from './pages/DriverGesture';
 import AlertCenter from './pages/AlertCenter';
+import UserOperationLogs from './pages/UserOperationLogs';
 import History from './pages/History';
 import Profile from './pages/Profile';
 import Login from './pages/Login';
@@ -45,6 +46,7 @@ const AuthenticatedApp: React.FC = () => {
           <Route path="/profile" element={<Profile />} />
           <Route element={<RoleGuard allowedRoles={['admin']} />}>
             <Route path="/alerts" element={<AlertCenter />} />
+            <Route path="/admin/operation-logs" element={<UserOperationLogs />} />
           </Route>
         </Route>
       </Route>

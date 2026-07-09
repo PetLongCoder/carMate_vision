@@ -176,9 +176,26 @@ export type AlertLevel = 'info' | 'warning' | 'critical';
 export interface HistoryRecord {
   id: number;
   type: 'plate' | 'police_gesture' | 'driver_gesture';
+  module?: string;
+  module_label?: string;
+  source_type?: string;
+  source_label?: string;
+  file_name?: string | null;
+  success?: boolean;
+  summary?: string | null;
   image: string;
   result: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface HistoryListResponse {
+  list: HistoryRecord[];
+  total: number;
+}
+
+export interface HistoryTypeOption {
+  value: string;
+  label: string;
 }
 
 // ============================================================
@@ -223,6 +240,7 @@ export interface User {
 export interface LoginRequest {
   username: string;
   password: string;
+  portal?: UserRole;
 }
 
 export interface PhoneLoginRequest {
@@ -331,4 +349,31 @@ export interface WechatBindPollResponse {
   status: WechatPollStatus;
   user?: User;
   step?: number;
+}
+
+export interface OperationLogActionOption {
+  value: string;
+  label: string;
+}
+
+export interface UserOperationLog {
+  id: number;
+  user_id: number | null;
+  username: string | null;
+  role: string | null;
+  action: string;
+  action_label: string;
+  success: boolean;
+  message: string | null;
+  detail: Record<string, unknown> | null;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;
+}
+
+export interface OperationLogListResponse {
+  list: UserOperationLog[];
+  total: number;
+  page: number;
+  pageSize: number;
 }

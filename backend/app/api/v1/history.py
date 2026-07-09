@@ -1,79 +1,112 @@
-import json
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import desc
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.api.v1.auth import ok, require_current_user
 from app.core.database import get_db
-from app.models.db_models import PoliceGestureLog
-from app.utils.logger import logger
+from app.models.db_models import HistoryRecord, User
+from app.services.record_service import TYPE_LABELS, history_record_to_dict
 
 router = APIRouter()
 
 
+def _apply_filters(
+    query,
+    *,
+    record_type: Optional[str],
+    source_type: Optional[str],
+    success: Optional[bool],
+    keyword: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+):
+    if record_type:
+        query = query.filter(HistoryRecord.type == record_type)
+    if source_type:
+        query = query.filter(
+            or_(
+                HistoryRecord.result_json.like(f'%"sourceType": "{source_type}"%'),
+                HistoryRecord.result_json.like(f'%"sourceType":"{source_type}"%'),
+            )
+        )
+    if success is not None:
+        if success:
+            query = query.filter(
+                or_(
+                    HistoryRecord.result_json.like('%"success": true%'),
+                    HistoryRecord.result_json.like('%"success":true%'),
+                    HistoryRecord.result_json.is_(None),
+                    ~HistoryRecord.result_json.like('%"success":%'),
+                )
+            )
+        else:
+            query = query.filter(
+                or_(
+                    HistoryRecord.result_json.like('%"success": false%'),
+                    HistoryRecord.result_json.like('%"success":false%'),
+                )
+            )
+    if keyword:
+        kw = keyword.strip()
+        query = query.filter(
+            or_(
+                HistoryRecord.result_json.like(f"%{kw}%"),
+                HistoryRecord.type.like(f"%{kw}%"),
+            )
+        )
+    if start_date:
+        try:
+            start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
+            query = query.filter(HistoryRecord.created_at >= start.replace(tzinfo=None))
+        except ValueError:
+            pass
+    if end_date:
+        try:
+            end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
+            query = query.filter(HistoryRecord.created_at <= end.replace(tzinfo=None))
+        except ValueError:
+            pass
+    return query
+
+
 @router.get("/history")
-async def get_history(
+def get_history(
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=100),
-    type: Optional[str] = Query(None, description="筛选类型: gesture(交警手势)"),
+    page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
+    type: Optional[str] = None,
+    source_type: Optional[str] = Query(None, alias="sourceType"),
+    success: Optional[bool] = None,
+    keyword: Optional[str] = None,
+    start_date: Optional[str] = Query(None, alias="startDate"),
+    end_date: Optional[str] = Query(None, alias="endDate"),
+    user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取历史记录 — 包含交警手势识别日志"""
-    logger.info(f"查询历史记录: page={page}, pageSize={page_size}, type={type}")
+    """当前登录用户的识别历史（history_records）。"""
+    query = db.query(HistoryRecord).filter(HistoryRecord.user_id == user.id)
+    query = _apply_filters(
+        query,
+        record_type=type,
+        source_type=source_type,
+        success=success,
+        keyword=keyword,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
-    # 构建联合查询 (当前只有交警手势日志, 后续可扩展车牌识别等)
-    query = db.query(PoliceGestureLog)
+    total = query.count()
+    records = (
+        query.order_by(HistoryRecord.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    return ok({"list": [history_record_to_dict(item) for item in records], "total": total})
 
-    if type == "gesture" or type is None:
-        pass  # 当前全量即 gesture
-    elif type:
-        # 未知类型返回空
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {"list": [], "total": 0, "page": page, "pageSize": page_size},
-        }
 
-    if type == "gesture" or type is None:
-        total = query.count()
-        rows = (
-            query.order_by(desc(PoliceGestureLog.created_at))
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-            .all()
-        )
-
-        def _row_to_dict(row):
-            segments = None
-            if row.segments_json:
-                try:
-                    segments = json.loads(row.segments_json)
-                except Exception:
-                    pass
-            return {
-                "id": row.id,
-                "type": "gesture",
-                "recognitionType": row.recognition_type,
-                "videoSessionId": row.video_session_id,
-                "filename": row.filename,
-                "gesture": row.gesture,
-                "gestureId": row.gesture_id,
-                "confidence": row.confidence,
-                "inferenceMs": row.inference_ms,
-                "videoDuration": row.video_duration,
-                "segments": segments,
-                "success": row.success,
-                "createdAt": row.created_at.isoformat() if row.created_at else None,
-            }
-
-        return {
-            "code": 200,
-            "message": "success",
-            "data": {
-                "list": [_row_to_dict(row) for row in rows],
-                "total": total,
-                "page": page,
-                "pageSize": page_size,
-            },
-        }
+@router.get("/history/types")
+def list_history_types(_: User = Depends(require_current_user)):
+    return ok([{"value": key, "label": label} for key, label in TYPE_LABELS.items()])

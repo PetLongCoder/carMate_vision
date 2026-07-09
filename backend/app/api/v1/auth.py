@@ -5,7 +5,7 @@ from typing import Any
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.account_security import ensure_can_remove_method, list_login_methods, can_delete_account
@@ -34,6 +34,7 @@ from app.models.auth_schemas import (
     VerifySmsCodeRequest,
 )
 from app.models.db_models import User, VerificationCode
+from app.services.operation_log_service import log_operation
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/auth", tags=["用户认证"])
@@ -144,6 +145,12 @@ def require_current_user(user: User | None = Depends(get_current_user)) -> User:
     return user
 
 
+def require_admin(user: User = Depends(require_current_user)) -> User:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+
 def seed_default_users(db: Session) -> None:
     defaults = [
         {
@@ -230,7 +237,7 @@ def send_email_code(body: SendEmailCodeRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/register")
-def register(body: RegisterRequest, db: Session = Depends(get_db)):
+def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db)):
     if body.username.lower() in RESERVED_USERNAMES:
         return fail("该用户名不可注册")
 
@@ -258,21 +265,77 @@ def register(body: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     logger.info(f"新用户注册: {user.username} (id={user.id})")
+    log_operation(
+        db,
+        action="register",
+        user=user,
+        success=True,
+        request=request,
+        detail={"phone": body.phone, "email": body.email},
+    )
     return ok(build_auth_response(user).model_dump())
 
 
 @router.post("/login")
-def login(body: LoginRequest, db: Session = Depends(get_db)):
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == body.username).first()
     if not user:
+        log_operation(
+            db,
+            action="login_failed",
+            username=body.username,
+            success=False,
+            message="用户名未注册",
+            request=request,
+            detail={"method": "password"},
+        )
         return fail("该用户名未注册，请先注册", auth_error_code="NOT_REGISTERED")
     if not verify_password(body.password, user.password_hash):
+        log_operation(
+            db,
+            action="login_failed",
+            user=user,
+            success=False,
+            message="密码错误",
+            request=request,
+            detail={"method": "password"},
+        )
         return fail("密码错误")
+    if body.portal == "user" and user.role == "admin":
+        log_operation(
+            db,
+            action="login_failed",
+            user=user,
+            success=False,
+            message="请使用管理员登录入口",
+            request=request,
+            detail={"method": "password", "portal": body.portal},
+        )
+        return fail("请使用管理员登录入口")
+    if body.portal == "admin" and user.role != "admin":
+        log_operation(
+            db,
+            action="login_failed",
+            user=user,
+            success=False,
+            message="该账号不是管理员",
+            request=request,
+            detail={"method": "password", "portal": body.portal},
+        )
+        return fail("该账号不是管理员")
+    log_operation(
+        db,
+        action="login",
+        user=user,
+        success=True,
+        request=request,
+        detail={"method": "password", "portal": body.portal},
+    )
     return ok(build_auth_response(user).model_dump())
 
 
 @router.post("/sms/login")
-def login_by_phone(body: PhoneLoginRequest, db: Session = Depends(get_db)):
+def login_by_phone(body: PhoneLoginRequest, request: Request, db: Session = Depends(get_db)):
     code_error = verify_code(db, f"phone:{body.phone}", body.code)
     if code_error:
         return fail(code_error)
@@ -282,11 +345,19 @@ def login_by_phone(body: PhoneLoginRequest, db: Session = Depends(get_db)):
         return fail("该手机号未注册，请先注册", auth_error_code="NOT_REGISTERED")
     if user.role == "admin":
         return fail("管理员请使用账号密码登录")
+    log_operation(
+        db,
+        action="login_phone",
+        user=user,
+        success=True,
+        request=request,
+        detail={"phone": body.phone},
+    )
     return ok(build_auth_response(user).model_dump())
 
 
 @router.post("/email/login")
-def login_by_email(body: EmailLoginRequest, db: Session = Depends(get_db)):
+def login_by_email(body: EmailLoginRequest, request: Request, db: Session = Depends(get_db)):
     code_error = verify_code(db, f"email:{body.email}", body.code)
     if code_error:
         return fail(code_error)
@@ -296,6 +367,14 @@ def login_by_email(body: EmailLoginRequest, db: Session = Depends(get_db)):
         return fail("该邮箱未注册，请先注册", auth_error_code="NOT_REGISTERED")
     if user.role == "admin":
         return fail("管理员请使用账号密码登录")
+    log_operation(
+        db,
+        action="login_email",
+        user=user,
+        success=True,
+        request=request,
+        detail={"email": body.email},
+    )
     return ok(build_auth_response(user).model_dump())
 
 
@@ -309,19 +388,27 @@ def get_me(user: User | None = Depends(get_current_user)):
 @router.put("/profile")
 def update_profile(
     body: UpdateProfileRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
+    old_nickname = user.nickname
     if body.nickname is not None:
         user.nickname = body.nickname
     db.commit()
     db.refresh(user)
+    log_operation(
+        db,
+        action="profile_update",
+        user=user,
+        success=True,
+        request=request,
+        detail={"old_nickname": old_nickname, "new_nickname": user.nickname},
+    )
     return ok(user_to_out(user).model_dump())
-
-
-@router.post("/bind/phone")
 def bind_phone(
     body: BindPhoneRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -339,12 +426,14 @@ def bind_phone(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 绑定手机号: {body.phone}")
+    log_operation(db, action="bind_phone", user=user, success=True, request=request, detail={"phone": body.phone})
     return ok(user_to_out(user).model_dump())
 
 
 @router.post("/bind/email")
 def bind_email(
     body: BindEmailRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -362,6 +451,7 @@ def bind_email(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 绑定邮箱: {body.email}")
+    log_operation(db, action="bind_email", user=user, success=True, request=request, detail={"email": body.email})
     return ok(user_to_out(user).model_dump())
 
 
@@ -408,6 +498,7 @@ def send_secure_email_code(
 @router.post("/unbind/phone")
 def unbind_phone(
     body: UnbindCodeRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -423,12 +514,14 @@ def unbind_phone(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 解绑手机号")
+    log_operation(db, action="unbind_phone", user=user, success=True, request=request)
     return ok(user_to_out(user).model_dump())
 
 
 @router.post("/unbind/email")
 def unbind_email(
     body: UnbindCodeRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -444,12 +537,14 @@ def unbind_email(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 解绑邮箱")
+    log_operation(db, action="unbind_email", user=user, success=True, request=request)
     return ok(user_to_out(user).model_dump())
 
 
 @router.post("/rebind/phone")
 def rebind_phone(
     body: RebindPhoneRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -471,12 +566,21 @@ def rebind_phone(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 换绑手机号: {body.new_phone}")
+    log_operation(
+        db,
+        action="rebind_phone",
+        user=user,
+        success=True,
+        request=request,
+        detail={"new_phone": body.new_phone},
+    )
     return ok(user_to_out(user).model_dump())
 
 
 @router.post("/rebind/email")
 def rebind_email(
     body: RebindEmailRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -498,12 +602,21 @@ def rebind_email(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 换绑邮箱: {body.new_email}")
+    log_operation(
+        db,
+        action="rebind_email",
+        user=user,
+        success=True,
+        request=request,
+        detail={"new_email": body.new_email},
+    )
     return ok(user_to_out(user).model_dump())
 
 
 @router.post("/account/change-password")
 def change_password(
     body: ChangePasswordRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -537,12 +650,21 @@ def change_password(
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 修改密码")
+    log_operation(
+        db,
+        action="change_password",
+        user=user,
+        success=True,
+        request=request,
+        detail={"verify_method": body.verify_method},
+    )
     return ok(user_to_out(user).model_dump())
 
 
 @router.post("/account/delete")
 def delete_account(
     body: DeleteAccountRequest,
+    request: Request,
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
@@ -577,6 +699,18 @@ def delete_account(
         return fail("不支持的验证方式")
 
     username = user.username
+    user_id = user.id
+    user_role = user.role
+    log_operation(
+        db,
+        action="delete_account",
+        user_id=user_id,
+        username=username,
+        role=user_role,
+        success=True,
+        request=request,
+        detail={"verify_method": body.verify_method},
+    )
     db.delete(user)
     db.commit()
     logger.info(f"用户注销账号: {username}")

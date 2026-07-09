@@ -17,8 +17,14 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Response
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Response, Request, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+
+from app.api.v1.auth import get_current_user
+from app.core.database import get_db
+from app.models.db_models import User
+from app.services.record_service import build_plate_summary, log_recognition
 
 from app.services.plate_recognition import (
     recognize_plates,
@@ -42,7 +48,12 @@ VIDEO_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"}
 # ═══════════════════════════════════════════════════════════
 
 @router.post("/plate/recognize")
-async def recognize_plate(file: UploadFile = File(...)):
+async def recognize_plate(
+    file: UploadFile = File(...),
+    request: Request = None,
+    user: User | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     车牌识别接口 (POST /api/plate/recognize)
 
@@ -81,6 +92,17 @@ async def recognize_plate(file: UploadFile = File(...)):
         logger.info(f"图片尺寸: {image.shape[1]}x{image.shape[0]}")
         plates = recognize_plates(image)
 
+    log_recognition(
+        db,
+        record_type="plate",
+        source_type="video" if is_video else "image",
+        success=bool(plates),
+        summary=build_plate_summary(plates),
+        result={"plates": plates},
+        file_name=file.filename,
+        user=user,
+    )
+
     return {
         "code": 200,
         "message": "识别完成" if plates else "未识别到车牌",
@@ -93,7 +115,12 @@ async def recognize_plate(file: UploadFile = File(...)):
 # ═══════════════════════════════════════════════════════════
 
 @router.post("/plate/track")
-async def track_video(file: UploadFile = File(...)):
+async def track_video(
+    file: UploadFile = File(...),
+    request: Request = None,
+    user: User | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """
     上传视频并启动实时追踪 (POST /api/plate/track)
 
@@ -134,6 +161,21 @@ async def track_video(file: UploadFile = File(...)):
     logger.info(
         f"视频追踪会话已创建: {session.session_id}, "
         f"{len(contents)} bytes, {total_frames} 帧"
+    )
+
+    log_recognition(
+        db,
+        record_type="plate",
+        source_type="track",
+        success=True,
+        summary=f"视频追踪 {file.filename or 'video.mp4'}",
+        result={
+            "sessionId": session.session_id,
+            "fileName": file.filename,
+            "totalFrames": total_frames,
+        },
+        file_name=file.filename,
+        user=user,
     )
 
     return {

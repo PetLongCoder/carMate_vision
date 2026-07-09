@@ -1,7 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, funcfrom sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
@@ -20,6 +19,57 @@ class User(Base):
     nickname: Mapped[str | None] = mapped_column(String(64))
     avatar_url: Mapped[str | None] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UserOperationLog(Base):
+    __tablename__ = "user_operation_logs"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    username: Mapped[str | None] = mapped_column(String(50), index=True)
+    role: Mapped[str | None] = mapped_column(String(10))
+    action: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    message: Mapped[str | None] = mapped_column(String(255))
+    detail: Mapped[str | None] = mapped_column(Text)
+    ip_address: Mapped[str | None] = mapped_column(String(45))
+    user_agent: Mapped[str | None] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class HistoryRecord(Base):
+    __tablename__ = "history_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    image_url: Mapped[str | None] = mapped_column(String(500))
+    result_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class RecognitionRecord(Base):
+    __tablename__ = "recognition_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    result_summary: Mapped[str | None] = mapped_column(String(255))
+    confidence: Mapped[float | None] = mapped_column(Float)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
+
+
+class AlertRecord(Base):
+    __tablename__ = "alert_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    level: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str | None] = mapped_column(String(100))
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 
 class VerificationCode(Base):

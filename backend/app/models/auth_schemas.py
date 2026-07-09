@@ -27,6 +27,7 @@ ChangePasswordVerifyMethod = Literal["password", "phone", "email"]
 class LoginRequest(BaseModel):
     username: str
     password: str
+    portal: Literal["user", "admin"] = "user"
 
 
 class RegisterRequest(BaseModel):
