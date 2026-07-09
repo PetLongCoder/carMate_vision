@@ -35,3 +35,5 @@ data/
 frontend/.env
 node_modules
 test_video.mp4
+auto.crt
+auto.key

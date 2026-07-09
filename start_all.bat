@@ -10,11 +10,10 @@ echo.
 
 :: ── 1. 检查依赖 ──
 echo [检查环境] -----------------------------------------------
-where mediamtx >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [✗] MediaMTX 未安装! 请从 https://github.com/bluenviron/mediamtx/releases 下载
+if exist mediamtx\mediamtx.exe ( echo [✓] MediaMTX ) else (
+    echo [✗] mediamtx\mediamtx.exe 未找到! 请从 https://github.com/bluenviron/mediamtx/releases 下载
     pause & exit /b 1
-) else echo [✓] MediaMTX
+)
 
 where ffmpeg >nul 2>&1
 if %errorlevel% equ 0 ( echo [✓] FFmpeg ) else echo [!] FFmpeg 未找到, 推流功能不可用

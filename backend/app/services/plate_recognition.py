@@ -76,7 +76,7 @@ class PlateRecognizer:
             raw = self.catcher(image)
             all_results.extend(raw)
         except Exception as e:
-            logger.warning("HyperLPR3 检测异常: %s", e)
+            logger.warning(f"HyperLPR3 检测异常: {e}")
 
         CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.5)
 
@@ -104,7 +104,7 @@ class PlateRecognizer:
                 },
             })
 
-        logger.info("HyperLPR3 识别到 %d 个车牌", len(results))
+        logger.info(f"HyperLPR3 识别到 {len(results)} 个车牌")
         return results
 
 
@@ -309,7 +309,7 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
             "bbox": plate["bbox"],
         })
 
-    logger.info("识别到 %d 个车牌（%d 辆车裁切）", len(results), len(vehicles))
+    logger.info(f"识别到 {len(results)} 个车牌（{len(vehicles)} 辆车裁切）")
     return results
 
 
