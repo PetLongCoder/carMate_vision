@@ -189,9 +189,15 @@ async def _run_event_loop(
 ):
     logger.info(f"会话 {session.session_id} 进入播放驱动模式")
     cache: dict[int, list[dict]] = {}
+    last_sync_time = time.time()
 
     while True:
         if session.status == SessionStatus.STOPPED:
+            break
+        # 60 秒无同步信号则自动停止（用户已离开）
+        if time.time() - last_sync_time > 60:
+            logger.info(f"会话 {session.session_id}: 60秒无操作, 自动停止")
+            session.update_status(SessionStatus.STOPPED, "超时无操作")
             break
         wait_ms = 0.001
         try:
@@ -202,6 +208,7 @@ async def _run_event_loop(
         sync_data = session._latest_sync
         if sync_data is None:
             continue
+        last_sync_time = time.time()
         _, target_time = sync_data
         target_frame = int(target_time * fps)
         aligned = (target_frame // 1) * 1
@@ -255,23 +262,24 @@ def _save_tracking_summary_to_db(session: TrackingSession, summary: dict) -> Non
     from app.services.record_service import build_plate_summary, update_recognition_by_session
 
     plates = summary.get("plates", [])
-    plate_summary = build_plate_summary(plates) if plates else "未识别到车牌"
-
     db = SessionLocal()
     try:
-        update_recognition_by_session(
-            db,
-            session_id=session.session_id,
-            final_result={
-                "plates": plates,
-                "totalFrames": summary.get("totalFrames", 0),
-                "processedFrames": summary.get("processedFrames", 0),
-                "duration": summary.get("duration", 0),
-                "sourceType": "stream" if session.type == SessionType.STREAM else "track",
-            },
-            success=True,
-            summary=plate_summary,
-        )
+        if plates:
+            plate_summary = build_plate_summary(plates)
+            update_recognition_by_session(
+                db,
+                session_id=session.session_id,
+                final_result={
+                    "plates": plates,
+                    "totalFrames": summary.get("totalFrames", 0),
+                    "processedFrames": summary.get("processedFrames", 0),
+                    "duration": summary.get("duration", 0),
+                    "sourceType": "stream" if session.type == SessionType.STREAM else "track",
+                },
+                success=True,
+                summary=plate_summary,
+            )
+            logger.info(f"追踪结果已保存到历史记录 [{session.session_id}]: {plate_summary}")
     except Exception as exc:
         logger.warning(f"保存追踪结果到历史记录失败 [{session.session_id}]: {exc}")
         db.rollback()
