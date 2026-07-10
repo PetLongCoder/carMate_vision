@@ -9,6 +9,7 @@ from app.api.v1.auth import ok, require_current_user
 from app.core.database import get_db
 from app.models.db_models import HistoryRecord, User
 from app.services.record_service import TYPE_LABELS, history_record_to_dict
+from app.utils.date_filters import apply_created_at_end, apply_created_at_start
 
 router = APIRouter()
 
@@ -58,17 +59,9 @@ def _apply_filters(
             )
         )
     if start_date:
-        try:
-            start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
-            query = query.filter(HistoryRecord.created_at >= start.replace(tzinfo=None))
-        except ValueError:
-            pass
+        query = apply_created_at_start(query, HistoryRecord.created_at, start_date)
     if end_date:
-        try:
-            end = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-            query = query.filter(HistoryRecord.created_at <= end.replace(tzinfo=None))
-        except ValueError:
-            pass
+        query = apply_created_at_end(query, HistoryRecord.created_at, end_date)
     return query
 
 

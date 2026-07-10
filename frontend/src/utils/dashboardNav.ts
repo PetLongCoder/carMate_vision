@@ -18,10 +18,8 @@ export function buildRecognitionRecordsPath(query: RecognitionRecordQuery = {}):
 }
 
 export function todayRange(): { startDate: string; endDate: string } {
-  return {
-    startDate: dayjs().startOf('day').toISOString(),
-    endDate: dayjs().endOf('day').toISOString(),
-  };
+  const today = dayjs().format('YYYY-MM-DD');
+  return { startDate: today, endDate: today };
 }
 
 export function buildAlertsPath(options?: { acknowledged?: boolean; level?: string }): string {
