@@ -85,6 +85,36 @@ class VerificationCode(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class PlateRecord(Base):
+    """车牌识别结果明细表 — 每行一个车牌"""
+    __tablename__ = "plate_records"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    # 关联到 history_records（不设物理外键约束，允许历史数据清理）
+    history_record_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    # 追踪会话 ID（仅追踪/流场景有值）
+    session_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    # 用户 ID（反范式冗余，避免联表）
+    user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    # 车牌号码（核心查询字段）
+    plate_no: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    # 车牌颜色: blue/green/yellow/white/black
+    color: Mapped[str | None] = mapped_column(String(10))
+    # 车辆类型: car/bus/truck/unknown
+    vehicle_type: Mapped[str | None] = mapped_column(String(20))
+    # 置信度 (0~1)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    # 首次出现时间戳（秒，视频/追踪场景）
+    first_seen: Mapped[float | None] = mapped_column(Float)
+    # 最后出现时间戳（秒，视频/追踪场景）
+    last_seen: Mapped[float | None] = mapped_column(Float)
+    # 出现帧数（追踪场景）
+    appearances: Mapped[int] = mapped_column(Integer, default=1)
+    # 来源类型: image/video/track/stream
+    source_type: Mapped[str | None] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class PoliceGestureLog(Base):
     """交警手势识别日志 — 存储到云数据库"""
     __tablename__ = "police_gesture_logs"

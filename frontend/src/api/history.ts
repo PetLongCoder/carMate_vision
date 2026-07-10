@@ -8,6 +8,7 @@ export interface HistoryQuery {
   sourceType?: string;
   success?: boolean;
   keyword?: string;
+  plateNo?: string;
   startDate?: string;
   endDate?: string;
 }

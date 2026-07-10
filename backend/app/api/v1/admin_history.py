@@ -2,12 +2,12 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import or_
+from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
 
 from app.api.v1.auth import ok, require_admin
 from app.core.database import get_db
-from app.models.db_models import HistoryRecord, User
+from app.models.db_models import HistoryRecord, PlateRecord, User
 from app.services.record_service import TYPE_LABELS, history_record_to_dict
 
 router = APIRouter(prefix="/admin", tags=["管理员"])
@@ -20,6 +20,7 @@ def _apply_filters(
     source_type: Optional[str],
     success: Optional[bool],
     keyword: Optional[str],
+    plate_no: Optional[str],
     username: Optional[str],
     start_date: Optional[str],
     end_date: Optional[str],
@@ -60,6 +61,14 @@ def _apply_filters(
                 HistoryRecord.type.like(f"%{kw}%"),
             )
         )
+    if plate_no:
+        kw = plate_no.strip()
+        query = query.filter(
+            exists().where(
+                PlateRecord.history_record_id == HistoryRecord.id,
+                PlateRecord.plate_no.like(f"%{kw}%"),
+            )
+        )
     if start_date:
         try:
             start = datetime.fromisoformat(start_date.replace("Z", "+00:00"))
@@ -89,6 +98,7 @@ def list_recognition_records(
     success: Optional[bool] = None,
     keyword: Optional[str] = None,
     username: Optional[str] = None,
+    plate_no: Optional[str] = Query(None, alias="plateNo"),
     start_date: Optional[str] = Query(None, alias="startDate"),
     end_date: Optional[str] = Query(None, alias="endDate"),
     _: User = Depends(require_admin),
@@ -105,6 +115,7 @@ def list_recognition_records(
         source_type=source_type,
         success=success,
         keyword=keyword,
+        plate_no=plate_no,
         username=username,
         start_date=start_date,
         end_date=end_date,

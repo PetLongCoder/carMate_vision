@@ -13,6 +13,7 @@ export interface AdminRecognitionQuery {
   success?: boolean;
   keyword?: string;
   username?: string;
+  plateNo?: string;
   startDate?: string;
   endDate?: string;
 }

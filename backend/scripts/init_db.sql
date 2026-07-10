@@ -84,3 +84,24 @@ CREATE TABLE IF NOT EXISTS alert_records (
   INDEX idx_acknowledged (acknowledged),
   INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS plate_records (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  history_record_id INT NOT NULL,
+  session_id VARCHAR(36) NULL,
+  user_id INT NULL,
+  plate_no VARCHAR(20) NOT NULL,
+  color VARCHAR(10) NULL,
+  vehicle_type VARCHAR(20) NULL,
+  confidence FLOAT NULL,
+  first_seen FLOAT NULL,
+  last_seen FLOAT NULL,
+  appearances INT DEFAULT 1,
+  source_type VARCHAR(10) NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_plate_no (plate_no),
+  INDEX idx_history_record_id (history_record_id),
+  INDEX idx_user_id (user_id),
+  INDEX idx_session_id (session_id),
+  INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
