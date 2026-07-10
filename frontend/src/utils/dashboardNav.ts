@@ -31,3 +31,15 @@ export function buildAlertsPath(options?: { acknowledged?: boolean; level?: stri
   const qs = params.toString();
   return qs ? `/alerts?${qs}` : '/alerts';
 }
+
+export type GestureStatsMode = 'total' | 'today' | 'success';
+export type GestureStatsTab = 'police' | 'driver' | 'logs';
+
+export function buildGestureStatsPath(
+  mode: GestureStatsMode = 'total',
+  tab?: GestureStatsTab,
+): string {
+  const params = new URLSearchParams({ mode });
+  if (tab) params.set('tab', tab);
+  return `/dashboard/gestures?${params.toString()}`;
+}

@@ -12,25 +12,9 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { PageHeader, Loading } from '../components/common';
 import StatCard from '../components/dashboard/StatCard';
-import GestureBreakdownDrawer, {
-  type GestureDrawerMode,
-} from '../components/dashboard/GestureBreakdownDrawer';
 import { getDashboardStats } from '../api/stats';
-import type { DashboardStats as StatsType, GestureBreakdown, TodayGestureBreakdown } from '../types';
-import { buildAlertsPath, buildRecognitionRecordsPath } from '../utils/dashboardNav';
-
-const emptyBreakdown: GestureBreakdown = {
-  policeGestureRecords: 0,
-  driverGestureRecords: 0,
-  policeGestureLogs: 0,
-  policeGestureLogsSuccess: 0,
-};
-
-const emptyTodayBreakdown: TodayGestureBreakdown = {
-  policeGestureRecords: 0,
-  driverGestureRecords: 0,
-  policeGestureLogs: 0,
-};
+import type { DashboardStats as StatsType } from '../types';
+import { buildAlertsPath, buildGestureStatsPath, buildRecognitionRecordsPath } from '../utils/dashboardNav';
 
 const shortcuts = [
   {
@@ -82,8 +66,6 @@ const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<StatsType | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [gestureDrawerOpen, setGestureDrawerOpen] = useState(false);
-  const [gestureDrawerMode, setGestureDrawerMode] = useState<GestureDrawerMode>('total');
 
   const loadStats = useCallback(async (silent = false) => {
     if (!silent) {
@@ -106,15 +88,7 @@ const Dashboard: React.FC = () => {
     void loadStats();
   }, [loadStats]);
 
-  const openGestureDrawer = (mode: GestureDrawerMode) => {
-    setGestureDrawerMode(mode);
-    setGestureDrawerOpen(true);
-  };
-
   if (loading) return <Loading tip="正在加载统计数据..." />;
-
-  const breakdown = stats?.gestureBreakdown ?? emptyBreakdown;
-  const todayBreakdown = stats?.todayGestureBreakdown ?? emptyTodayBreakdown;
 
   return (
     <div>
@@ -144,7 +118,7 @@ const Dashboard: React.FC = () => {
             value={stats?.totalGestures ?? 0}
             prefix={<AimOutlined />}
             valueStyle={{ color: '#52c41a' }}
-            onClick={() => openGestureDrawer('total')}
+            onClick={() => navigate(buildGestureStatsPath('total'))}
           />
         </Col>
         <Col xs={12} sm={8} lg={4}>
@@ -153,7 +127,7 @@ const Dashboard: React.FC = () => {
             value={stats?.todayGestures ?? 0}
             prefix={<RiseOutlined />}
             valueStyle={{ color: '#722ed1' }}
-            onClick={() => openGestureDrawer('today')}
+            onClick={() => navigate(buildGestureStatsPath('today'))}
           />
         </Col>
         <Col xs={12} sm={8} lg={4}>
@@ -162,7 +136,7 @@ const Dashboard: React.FC = () => {
             value={stats?.successGestures ?? 0}
             prefix={<CheckCircleOutlined />}
             valueStyle={{ color: '#13c2c2' }}
-            onClick={() => openGestureDrawer('success')}
+            onClick={() => navigate(buildGestureStatsPath('success'))}
           />
         </Col>
         <Col xs={12} sm={8} lg={4}>
@@ -210,14 +184,6 @@ const Dashboard: React.FC = () => {
           </Col>
         ))}
       </Row>
-
-      <GestureBreakdownDrawer
-        open={gestureDrawerOpen}
-        mode={gestureDrawerMode}
-        breakdown={breakdown}
-        todayBreakdown={todayBreakdown}
-        onClose={() => setGestureDrawerOpen(false)}
-      />
     </div>
   );
 };

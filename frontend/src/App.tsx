@@ -12,6 +12,7 @@ import DriverGesture from './pages/DriverGesture';
 import AlertCenter from './pages/AlertCenter';
 import UserOperationLogs from './pages/UserOperationLogs';
 import AdminRecognitionRecords from './pages/AdminRecognitionRecords';
+import DashboardGestureStats from './pages/DashboardGestureStats';
 import History from './pages/History';
 import Profile from './pages/Profile';
 import Login from './pages/Login';
@@ -49,6 +50,7 @@ const AuthenticatedApp: React.FC = () => {
           <Route path="/history" element={<History />} />
           <Route path="/profile" element={<Profile />} />
           <Route element={<RoleGuard allowedRoles={['admin']} />}>
+            <Route path="/dashboard/gestures" element={<DashboardGestureStats />} />
             <Route path="/alerts" element={<AlertCenter />} />
             <Route path="/admin/operation-logs" element={<UserOperationLogs />} />
             <Route path="/admin/recognition-records" element={<AdminRecognitionRecords />} />
