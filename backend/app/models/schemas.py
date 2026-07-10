@@ -68,3 +68,16 @@ class DashboardStats(BaseModel):
     successGestures: int
     totalAlerts: int
     unreadAlerts: int
+
+
+class GestureBreakdown(BaseModel):
+    policeGestureRecords: int
+    driverGestureRecords: int
+    policeGestureLogs: int
+    policeGestureLogsSuccess: int
+
+
+class TodayGestureBreakdown(BaseModel):
+    policeGestureRecords: int
+    driverGestureRecords: int
+    policeGestureLogs: int
