@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Card, Button, Segmented, Row, Col, Statistic, message } from 'antd';
 import {
   AimOutlined,
-  ArrowLeftOutlined,
   ReloadOutlined,
   HighlightOutlined,
   CarOutlined,
@@ -139,21 +138,13 @@ const DashboardGestureStats: React.FC = () => {
       <PageHeader
         title={meta.title}
         subtitle={meta.subtitle}
+        onBack={() => navigate('/')}
         extra={
           <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void loadStats(true)}>
             刷新
           </Button>
         }
       />
-
-      <Button
-        type="link"
-        icon={<ArrowLeftOutlined />}
-        onClick={() => navigate('/')}
-        style={{ paddingLeft: 0, marginBottom: 16 }}
-      >
-        返回控制面板
-      </Button>
 
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={24} sm={8}>
