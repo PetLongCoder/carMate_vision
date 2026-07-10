@@ -187,7 +187,12 @@ export function uploadDriverGestureImage(file: File) {
 //  告警
 // ═══════════════════════════════════════════════════════════
 
-export function getAlerts(params?: { page?: number; pageSize?: number; level?: string }) {
+export function getAlerts(params?: {
+  page?: number;
+  pageSize?: number;
+  level?: string;
+  acknowledged?: boolean;
+}) {
   return request.get<ApiResponse<{ list: Alert[]; total: number }>>('/alerts', { params });
 }
 
@@ -207,6 +212,4 @@ export function getHistory(params?: { page?: number; pageSize?: number; type?: s
 //  统计数据
 // ═══════════════════════════════════════════════════════════
 
-export function getDashboardStats() {
-  return request.get<ApiResponse<DashboardStats>>('/stats/dashboard');
-}
+export { getDashboardStats } from './stats';

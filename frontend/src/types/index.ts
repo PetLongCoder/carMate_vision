@@ -214,11 +214,28 @@ export interface AdminRecognitionListResponse {
 // 统计数据
 // ============================================================
 
+export interface GestureBreakdown {
+  policeGestureRecords: number;
+  driverGestureRecords: number;
+  policeGestureLogs: number;
+  policeGestureLogsSuccess: number;
+}
+
+export interface TodayGestureBreakdown {
+  policeGestureRecords: number;
+  driverGestureRecords: number;
+  policeGestureLogs: number;
+}
+
 export interface DashboardStats {
   totalPlates: number;
   totalGestures: number;
+  todayGestures: number;
+  successGestures: number;
   totalAlerts: number;
   unreadAlerts: number;
+  gestureBreakdown: GestureBreakdown;
+  todayGestureBreakdown: TodayGestureBreakdown;
 }
 
 // ============================================================

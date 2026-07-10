@@ -64,5 +64,20 @@ class HistoryRecord(BaseModel):
 class DashboardStats(BaseModel):
     totalPlates: int
     totalGestures: int
+    todayGestures: int
+    successGestures: int
     totalAlerts: int
     unreadAlerts: int
+
+
+class GestureBreakdown(BaseModel):
+    policeGestureRecords: int
+    driverGestureRecords: int
+    policeGestureLogs: int
+    policeGestureLogsSuccess: int
+
+
+class TodayGestureBreakdown(BaseModel):
+    policeGestureRecords: int
+    driverGestureRecords: int
+    policeGestureLogs: int

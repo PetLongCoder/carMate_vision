@@ -14,6 +14,7 @@ import {
 } from 'antd';
 import { ReloadOutlined, SearchOutlined, FileSearchOutlined } from '@ant-design/icons';
 import dayjs, { type Dayjs } from 'dayjs';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/common';
 import {
   getAdminRecognitionRecords,
@@ -55,6 +56,7 @@ function getResultText(record: AdminRecognitionRecord): string {
 }
 
 const AdminRecognitionRecords: React.FC = () => {
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [records, setRecords] = useState<AdminRecognitionRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -69,6 +71,28 @@ const AdminRecognitionRecords: React.FC = () => {
   const [plateNo, setPlateNo] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [selected, setSelected] = useState<AdminRecognitionRecord | null>(null);
+  const [filtersReady, setFiltersReady] = useState(false);
+
+  useEffect(() => {
+    const type = searchParams.get('type');
+    if (type) setRecordType(type);
+
+    const successParam = searchParams.get('success');
+    if (successParam === 'true') setSuccess(true);
+    if (successParam === 'false') setSuccess(false);
+
+    const startDate = searchParams.get('startDate');
+    const endDate = searchParams.get('endDate');
+    if (startDate && endDate) {
+      const start = dayjs(startDate);
+      const end = dayjs(endDate);
+      if (start.isValid() && end.isValid()) {
+        setDateRange([start, end]);
+      }
+    }
+
+    setFiltersReady(true);
+  }, [searchParams]);
 
   useEffect(() => {
     void getAdminRecognitionTypes()
@@ -101,8 +125,9 @@ const AdminRecognitionRecords: React.FC = () => {
   }, [page, pageSize, recordType, sourceType, success, keyword, plateNo, username, dateRange]);
 
   useEffect(() => {
+    if (!filtersReady) return;
     void loadRecords();
-  }, [loadRecords]);
+  }, [filtersReady, loadRecords]);
 
   const columns = [
     {

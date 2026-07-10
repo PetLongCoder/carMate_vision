@@ -27,12 +27,15 @@ def get_alerts(
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
     level: Optional[str] = None,
+    acknowledged: Optional[bool] = None,
     _: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     query = db.query(AlertRecord)
     if level:
         query = query.filter(AlertRecord.level == level)
+    if acknowledged is not None:
+        query = query.filter(AlertRecord.acknowledged == acknowledged)
 
     total = query.count()
     records = (
