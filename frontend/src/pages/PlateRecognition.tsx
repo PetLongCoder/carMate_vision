@@ -692,6 +692,8 @@ const PlateRecognition: React.FC = () => {
     }
     setStreamRunning(false);
     setWsStatus('disconnected');
+    setStreamDetections([]);
+    streamDetectionsRef.current = [];
     message.info('流追踪已停止');
   };
 
