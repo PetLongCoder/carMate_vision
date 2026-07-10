@@ -11,6 +11,7 @@ import PoliceGesture from './pages/PoliceGesture';
 import DriverGesture from './pages/DriverGesture';
 import AlertCenter from './pages/AlertCenter';
 import UserOperationLogs from './pages/UserOperationLogs';
+import AdminRecognitionRecords from './pages/AdminRecognitionRecords';
 import History from './pages/History';
 import Profile from './pages/Profile';
 import Login from './pages/Login';
@@ -47,6 +48,7 @@ const AuthenticatedApp: React.FC = () => {
           <Route element={<RoleGuard allowedRoles={['admin']} />}>
             <Route path="/alerts" element={<AlertCenter />} />
             <Route path="/admin/operation-logs" element={<UserOperationLogs />} />
+            <Route path="/admin/recognition-records" element={<AdminRecognitionRecords />} />
           </Route>
         </Route>
       </Route>

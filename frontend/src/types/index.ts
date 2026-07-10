@@ -198,6 +198,18 @@ export interface HistoryTypeOption {
   label: string;
 }
 
+export interface AdminRecognitionRecord extends HistoryRecord {
+  user_id?: number | null;
+  username?: string | null;
+}
+
+export interface AdminRecognitionListResponse {
+  list: AdminRecognitionRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 // ============================================================
 // 统计数据
 // ============================================================
