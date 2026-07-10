@@ -64,5 +64,7 @@ class HistoryRecord(BaseModel):
 class DashboardStats(BaseModel):
     totalPlates: int
     totalGestures: int
+    todayGestures: int
+    successGestures: int
     totalAlerts: int
     unreadAlerts: int

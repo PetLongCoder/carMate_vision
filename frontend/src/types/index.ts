@@ -217,6 +217,8 @@ export interface AdminRecognitionListResponse {
 export interface DashboardStats {
   totalPlates: number;
   totalGestures: number;
+  todayGestures: number;
+  successGestures: number;
   totalAlerts: number;
   unreadAlerts: number;
 }

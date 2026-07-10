@@ -30,6 +30,9 @@ const theme = {
 
 const HomePage: React.FC = () => {
   const isAdmin = useAuthStore((s) => s.isAdmin());
+  if (isAdmin) {
+    return <Dashboard />;
+  }
   return <Navigate to="/plate" replace />;
 };
 

@@ -207,6 +207,4 @@ export function getHistory(params?: { page?: number; pageSize?: number; type?: s
 //  统计数据
 // ═══════════════════════════════════════════════════════════
 
-export function getDashboardStats() {
-  return request.get<ApiResponse<DashboardStats>>('/stats/dashboard');
-}
+export { getDashboardStats } from './stats';
