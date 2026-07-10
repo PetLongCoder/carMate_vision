@@ -81,6 +81,24 @@ def log_recognition(
         result_json=json.dumps(payload, ensure_ascii=False) if payload else None,
     )
     db.add(record)
+
+    # flush 以获取 record.id, 用于 plate_records
+    db.flush()
+
+    # 车牌识别 → 写入 plate_records 明细
+    if record_type == "plate" and payload:
+        plates = _extract_plates(payload)
+        if plates and user_id:
+            from app.services.plate_record_service import save_plate_records
+            save_plate_records(
+                db,
+                history_record_id=record.id,
+                user_id=user_id,
+                session_id=session_id,
+                plates=plates,
+                source_type=source_type,
+            )
+
     db.add(
         RecognitionRecord(
             user_id=user_id,
@@ -122,6 +140,19 @@ def update_recognition_by_session(
     existing["success"] = success
     existing["summary"] = summary
     record.result_json = json.dumps(existing, ensure_ascii=False)
+
+    # 更新 plate_records（先删后插）
+    plates = _extract_plates(final_result)
+    if plates and record.user_id:
+        from app.services.plate_record_service import save_plate_records
+        save_plate_records(
+            db,
+            history_record_id=record.id,
+            user_id=record.user_id,
+            session_id=session_id,
+            plates=plates,
+            source_type=final_result.get("sourceType"),
+        )
 
     db.add(
         RecognitionRecord(
@@ -178,3 +209,11 @@ def history_record_to_dict(
         "result": result,
         "createdAt": record.created_at.isoformat() if record.created_at else None,
     }
+
+
+def _extract_plates(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """从 result dict 中提取 plates 列表。"""
+    if not result:
+        return []
+    plates = result.get("plates") or result.get("items") or []
+    return plates if isinstance(plates, list) else []

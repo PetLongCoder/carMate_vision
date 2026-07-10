@@ -66,6 +66,7 @@ const AdminRecognitionRecords: React.FC = () => {
   const [sourceType, setSourceType] = useState<string | undefined>();
   const [success, setSuccess] = useState<boolean | undefined>();
   const [keyword, setKeyword] = useState('');
+  const [plateNo, setPlateNo] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [selected, setSelected] = useState<AdminRecognitionRecord | null>(null);
 
@@ -86,6 +87,7 @@ const AdminRecognitionRecords: React.FC = () => {
         success,
         keyword: keyword.trim() || undefined,
         username: username.trim() || undefined,
+        plateNo: plateNo.trim() || undefined,
         startDate: dateRange?.[0]?.startOf('day').toISOString(),
         endDate: dateRange?.[1]?.endOf('day').toISOString(),
       });
@@ -96,7 +98,7 @@ const AdminRecognitionRecords: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, recordType, sourceType, success, keyword, username, dateRange]);
+  }, [page, pageSize, recordType, sourceType, success, keyword, plateNo, username, dateRange]);
 
   useEffect(() => {
     void loadRecords();
@@ -225,6 +227,14 @@ const AdminRecognitionRecords: React.FC = () => {
             style={{ width: 200 }}
             allowClear
           />
+          <Input
+            placeholder="车牌号"
+            prefix={<SearchOutlined />}
+            value={plateNo}
+            onChange={(e) => setPlateNo(e.target.value)}
+            style={{ width: 180 }}
+            allowClear
+          />
           <RangePicker
             value={dateRange}
             onChange={(values) => setDateRange(values as [Dayjs, Dayjs] | null)}
@@ -246,6 +256,7 @@ const AdminRecognitionRecords: React.FC = () => {
               setSourceType(undefined);
               setSuccess(undefined);
               setKeyword('');
+              setPlateNo('');
               setDateRange(null);
               setPage(1);
             }}

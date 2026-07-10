@@ -105,6 +105,7 @@ const History: React.FC = () => {
   const [sourceType, setSourceType] = useState<string | undefined>();
   const [success, setSuccess] = useState<boolean | undefined>();
   const [keyword, setKeyword] = useState('');
+  const [plateNo, setPlateNo] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs, Dayjs] | null>(null);
   const [selected, setSelected] = useState<HistoryRecord | null>(null);
 
@@ -124,6 +125,7 @@ const History: React.FC = () => {
         sourceType,
         success,
         keyword: keyword.trim() || undefined,
+        plateNo: plateNo.trim() || undefined,
         startDate: dateRange?.[0]?.startOf('day').toISOString(),
         endDate: dateRange?.[1]?.endOf('day').toISOString(),
       });
@@ -134,7 +136,7 @@ const History: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [page, pageSize, recordType, sourceType, success, keyword, dateRange]);
+  }, [page, pageSize, recordType, sourceType, success, keyword, plateNo, dateRange]);
 
   useEffect(() => {
     void loadHistory();
@@ -202,6 +204,7 @@ const History: React.FC = () => {
     setSourceType(undefined);
     setSuccess(undefined);
     setKeyword('');
+    setPlateNo('');
     setDateRange(null);
     setPage(1);
   };
@@ -253,6 +256,14 @@ const History: React.FC = () => {
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             style={{ width: 220 }}
+            allowClear
+          />
+          <Input
+            placeholder="车牌号"
+            prefix={<SearchOutlined />}
+            value={plateNo}
+            onChange={(e) => setPlateNo(e.target.value)}
+            style={{ width: 180 }}
             allowClear
           />
           <RangePicker
