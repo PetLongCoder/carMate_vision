@@ -61,23 +61,32 @@ class HistoryRecord(BaseModel):
 
 
 # ===== 仪表盘统计（供队友参考）=====
+class GestureBreakdown(BaseModel):
+    policeRecords: int
+    driverRecords: int
+    policeRecordsSuccess: int
+    driverRecordsSuccess: int
+    policeInferenceLogs: int
+    policeInferenceLogsSuccess: int
+
+
+class TodayGestureBreakdown(BaseModel):
+    policeRecords: int
+    driverRecords: int
+    policeRecordsSuccess: int
+    driverRecordsSuccess: int
+    policeInferenceLogs: int
+    policeInferenceLogsSuccess: int
+
+
 class DashboardStats(BaseModel):
+    gestureRecordTotal: int
+    gestureRecordToday: int
+    gestureRecordSuccess: int
+    gestureRecordTodaySuccess: int
     totalPlates: int
     totalGestures: int
     todayGestures: int
     successGestures: int
     totalAlerts: int
     unreadAlerts: int
-
-
-class GestureBreakdown(BaseModel):
-    policeGestureRecords: int
-    driverGestureRecords: int
-    policeGestureLogs: int
-    policeGestureLogsSuccess: int
-
-
-class TodayGestureBreakdown(BaseModel):
-    policeGestureRecords: int
-    driverGestureRecords: int
-    policeGestureLogs: int

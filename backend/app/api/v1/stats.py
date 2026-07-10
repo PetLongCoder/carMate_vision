@@ -6,16 +6,39 @@ from sqlalchemy.orm import Session
 
 from app.api.v1.auth import ok, require_admin
 from app.core.database import get_db
-from app.models.db_models import AlertRecord, HistoryRecord, PoliceGestureLog, RecognitionRecord, User
+from app.models.db_models import AlertRecord, PoliceGestureLog, RecognitionRecord, User
 from app.utils.logger import logger
 
 router = APIRouter()
 
+GESTURE_TYPES = ("police_gesture", "driver_gesture")
 
-def _count_history(db: Session, record_type: str, *, today_only: bool = False) -> int:
-    query = db.query(func.count(HistoryRecord.id)).filter(HistoryRecord.type == record_type)
+
+def _count_gesture_records(
+    db: Session,
+    *,
+    record_type: str | None = None,
+    today_only: bool = False,
+    success_only: bool = False,
+) -> int:
+    query = db.query(func.count(RecognitionRecord.id)).filter(
+        RecognitionRecord.type.in_(GESTURE_TYPES)
+    )
+    if record_type:
+        query = query.filter(RecognitionRecord.type == record_type)
     if today_only:
-        query = query.filter(func.date(HistoryRecord.created_at) == date.today())
+        query = query.filter(func.date(RecognitionRecord.created_at) == date.today())
+    if success_only:
+        query = query.filter(RecognitionRecord.success.is_(True))
+    return query.scalar() or 0
+
+
+def _count_police_logs(db: Session, *, today_only: bool = False, success_only: bool = False) -> int:
+    query = db.query(func.count(PoliceGestureLog.id))
+    if today_only:
+        query = query.filter(func.date(PoliceGestureLog.created_at) == date.today())
+    if success_only:
+        query = query.filter(PoliceGestureLog.success.is_(True))
     return query.scalar() or 0
 
 
@@ -32,56 +55,63 @@ def get_dashboard_stats(
         .scalar()
         or 0
     )
-    total_gestures_records = (
-        db.query(func.count(RecognitionRecord.id))
-        .filter(
-            RecognitionRecord.type.in_(["police_gesture", "driver_gesture"]),
-            RecognitionRecord.success.is_(True),
-        )
-        .scalar()
-        or 0
+
+    gesture_record_total = _count_gesture_records(db)
+    gesture_record_today = _count_gesture_records(db, today_only=True)
+    gesture_record_success = _count_gesture_records(db, success_only=True)
+    gesture_record_today_success = _count_gesture_records(
+        db, today_only=True, success_only=True
     )
-    total_police_logs = db.query(func.count(PoliceGestureLog.id)).scalar() or 0
-    success_police_logs = (
-        db.query(func.count(PoliceGestureLog.id))
-        .filter(PoliceGestureLog.success.is_(True))
-        .scalar()
-        or 0
-    )
-    today_police_logs = (
-        db.query(func.count(PoliceGestureLog.id))
-        .filter(func.date(PoliceGestureLog.created_at) == date.today())
-        .scalar()
-        or 0
-    )
+
     total_alerts = db.query(func.count(AlertRecord.id)).scalar() or 0
     unread_alerts = (
         db.query(func.count(AlertRecord.id)).filter(AlertRecord.acknowledged.is_(False)).scalar() or 0
     )
 
-    police_gesture_records = _count_history(db, "police_gesture")
-    driver_gesture_records = _count_history(db, "driver_gesture")
-    today_police_gesture_records = _count_history(db, "police_gesture", today_only=True)
-    today_driver_gesture_records = _count_history(db, "driver_gesture", today_only=True)
-
     return ok(
         {
+            # 手势三项主指标：统一来自 recognition_records，口径一致
+            "gestureRecordTotal": gesture_record_total,
+            "gestureRecordToday": gesture_record_today,
+            "gestureRecordSuccess": gesture_record_success,
+            "gestureRecordTodaySuccess": gesture_record_today_success,
+            # 兼容旧字段名（值与上面对齐）
+            "totalGestures": gesture_record_total,
+            "todayGestures": gesture_record_today,
+            "successGestures": gesture_record_success,
             "totalPlates": total_plates,
-            "totalGestures": total_gestures_records + total_police_logs,
-            "todayGestures": today_police_logs + today_police_gesture_records + today_driver_gesture_records,
-            "successGestures": success_police_logs,
             "totalAlerts": total_alerts,
             "unreadAlerts": unread_alerts,
+            # 明细页分类计数（与主指标同源；推理日志单独列出，不参与上面三项求和）
             "gestureBreakdown": {
-                "policeGestureRecords": police_gesture_records,
-                "driverGestureRecords": driver_gesture_records,
-                "policeGestureLogs": total_police_logs,
-                "policeGestureLogsSuccess": success_police_logs,
+                "policeRecords": _count_gesture_records(db, record_type="police_gesture"),
+                "driverRecords": _count_gesture_records(db, record_type="driver_gesture"),
+                "policeRecordsSuccess": _count_gesture_records(
+                    db, record_type="police_gesture", success_only=True
+                ),
+                "driverRecordsSuccess": _count_gesture_records(
+                    db, record_type="driver_gesture", success_only=True
+                ),
+                "policeInferenceLogs": _count_police_logs(db),
+                "policeInferenceLogsSuccess": _count_police_logs(db, success_only=True),
             },
             "todayGestureBreakdown": {
-                "policeGestureRecords": today_police_gesture_records,
-                "driverGestureRecords": today_driver_gesture_records,
-                "policeGestureLogs": today_police_logs,
+                "policeRecords": _count_gesture_records(
+                    db, record_type="police_gesture", today_only=True
+                ),
+                "driverRecords": _count_gesture_records(
+                    db, record_type="driver_gesture", today_only=True
+                ),
+                "policeRecordsSuccess": _count_gesture_records(
+                    db, record_type="police_gesture", today_only=True, success_only=True
+                ),
+                "driverRecordsSuccess": _count_gesture_records(
+                    db, record_type="driver_gesture", today_only=True, success_only=True
+                ),
+                "policeInferenceLogs": _count_police_logs(db, today_only=True),
+                "policeInferenceLogsSuccess": _count_police_logs(
+                    db, today_only=True, success_only=True
+                ),
             },
         }
     )
