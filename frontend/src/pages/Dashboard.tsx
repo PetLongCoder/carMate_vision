@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Row, Col, Card, Button, message } from 'antd';
+import { Row, Col, Card, Button, message, Typography } from 'antd';
 import {
   CameraOutlined,
   AimOutlined,
@@ -15,6 +15,8 @@ import StatCard from '../components/dashboard/StatCard';
 import { getDashboardStats } from '../api/stats';
 import type { DashboardStats as StatsType } from '../types';
 import { buildAlertsPath, buildGestureStatsPath, buildRecognitionRecordsPath } from '../utils/dashboardNav';
+
+const { Text } = Typography;
 
 const shortcuts = [
   {
@@ -114,8 +116,8 @@ const Dashboard: React.FC = () => {
         </Col>
         <Col xs={12} sm={8} lg={4}>
           <StatCard
-            title="手势识别总数"
-            value={stats?.totalGestures ?? 0}
+            title="手势记录（累计）"
+            value={stats?.gestureRecordTotal ?? 0}
             prefix={<AimOutlined />}
             valueStyle={{ color: '#52c41a' }}
             onClick={() => navigate(buildGestureStatsPath('total'))}
@@ -123,8 +125,8 @@ const Dashboard: React.FC = () => {
         </Col>
         <Col xs={12} sm={8} lg={4}>
           <StatCard
-            title="今日手势识别"
-            value={stats?.todayGestures ?? 0}
+            title="手势记录（今日）"
+            value={stats?.gestureRecordToday ?? 0}
             prefix={<RiseOutlined />}
             valueStyle={{ color: '#722ed1' }}
             onClick={() => navigate(buildGestureStatsPath('today'))}
@@ -132,8 +134,8 @@ const Dashboard: React.FC = () => {
         </Col>
         <Col xs={12} sm={8} lg={4}>
           <StatCard
-            title="手势识别成功"
-            value={stats?.successGestures ?? 0}
+            title="识别成功（累计）"
+            value={stats?.gestureRecordSuccess ?? 0}
             prefix={<CheckCircleOutlined />}
             valueStyle={{ color: '#13c2c2' }}
             onClick={() => navigate(buildGestureStatsPath('success'))}
@@ -158,6 +160,10 @@ const Dashboard: React.FC = () => {
           />
         </Col>
       </Row>
+
+      <Text type="secondary" style={{ display: 'block', marginBottom: 24 }}>
+        手势三项均统计识别记录表：累计 ≥ 今日，成功 ≤ 累计。车主摄像头逐帧也会产生记录。
+      </Text>
 
       <Row gutter={[16, 16]}>
         {shortcuts.map((item) => (

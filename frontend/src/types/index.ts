@@ -215,22 +215,38 @@ export interface AdminRecognitionListResponse {
 // ============================================================
 
 export interface GestureBreakdown {
-  policeGestureRecords: number;
-  driverGestureRecords: number;
-  policeGestureLogs: number;
-  policeGestureLogsSuccess: number;
+  policeRecords: number;
+  driverRecords: number;
+  policeRecordsSuccess: number;
+  driverRecordsSuccess: number;
+  policeInferenceLogs: number;
+  policeInferenceLogsSuccess: number;
 }
 
 export interface TodayGestureBreakdown {
-  policeGestureRecords: number;
-  driverGestureRecords: number;
-  policeGestureLogs: number;
+  policeRecords: number;
+  driverRecords: number;
+  policeRecordsSuccess: number;
+  driverRecordsSuccess: number;
+  policeInferenceLogs: number;
+  policeInferenceLogsSuccess: number;
 }
 
 export interface DashboardStats {
+  /** 手势识别记录累计（含未成功，含摄像头逐帧记录） */
+  gestureRecordTotal: number;
+  /** 今日新增手势识别记录 */
+  gestureRecordToday: number;
+  /** 累计识别成功次数 */
+  gestureRecordSuccess: number;
+  /** 今日识别成功次数 */
+  gestureRecordTodaySuccess: number;
   totalPlates: number;
+  /** @deprecated 与 gestureRecordTotal 相同，兼容旧代码 */
   totalGestures: number;
+  /** @deprecated 与 gestureRecordToday 相同 */
   todayGestures: number;
+  /** @deprecated 与 gestureRecordSuccess 相同 */
   successGestures: number;
   totalAlerts: number;
   unreadAlerts: number;

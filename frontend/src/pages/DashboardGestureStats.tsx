@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Card, Button, Segmented, Row, Col, Statistic, message } from 'antd';
+import { Card, Button, Segmented, Row, Col, Statistic, Typography, message } from 'antd';
 import {
   AimOutlined,
   ReloadOutlined,
@@ -15,6 +15,8 @@ import { getDashboardStats } from '../api/stats';
 import type { DashboardStats, GestureBreakdown, TodayGestureBreakdown } from '../types';
 import { todayRange } from '../utils/dashboardNav';
 
+const { Text, Paragraph } = Typography;
+
 export type GestureStatsMode = 'total' | 'today' | 'success';
 export type GestureStatsTab = 'police' | 'driver' | 'logs';
 
@@ -23,36 +25,41 @@ const modeMeta: Record<
   { title: string; subtitle: string; statTitle: string; color: string }
 > = {
   total: {
-    title: '手势识别明细',
-    subtitle: '查看交警手势、车主手势及推理日志分类数据',
-    statTitle: '识别总量',
+    title: '全部手势记录',
+    subtitle: '累计写入识别记录表的手势数据（含摄像头逐帧、未识别成功）',
+    statTitle: '记录累计',
     color: '#52c41a',
   },
   today: {
-    title: '今日手势识别',
-    subtitle: '查看今日各分类的手势识别记录',
-    statTitle: '今日总量',
+    title: '今日手势记录',
+    subtitle: '今日新增的识别记录（同一统计口径，必不大于累计）',
+    statTitle: '今日记录',
     color: '#722ed1',
   },
   success: {
-    title: '手势识别成功',
-    subtitle: '查看各分类中识别成功的记录',
-    statTitle: '成功总量',
+    title: '识别成功记录',
+    subtitle: '累计识别成功的次数（必不大于记录累计）',
+    statTitle: '成功累计',
     color: '#13c2c2',
   },
 };
 
 const emptyBreakdown: GestureBreakdown = {
-  policeGestureRecords: 0,
-  driverGestureRecords: 0,
-  policeGestureLogs: 0,
-  policeGestureLogsSuccess: 0,
+  policeRecords: 0,
+  driverRecords: 0,
+  policeRecordsSuccess: 0,
+  driverRecordsSuccess: 0,
+  policeInferenceLogs: 0,
+  policeInferenceLogsSuccess: 0,
 };
 
 const emptyTodayBreakdown: TodayGestureBreakdown = {
-  policeGestureRecords: 0,
-  driverGestureRecords: 0,
-  policeGestureLogs: 0,
+  policeRecords: 0,
+  driverRecords: 0,
+  policeRecordsSuccess: 0,
+  driverRecordsSuccess: 0,
+  policeInferenceLogs: 0,
+  policeInferenceLogsSuccess: 0,
 };
 
 function getTabCounts(
@@ -62,22 +69,22 @@ function getTabCounts(
 ) {
   if (mode === 'today') {
     return {
-      police: todayBreakdown.policeGestureRecords,
-      driver: todayBreakdown.driverGestureRecords,
-      logs: todayBreakdown.policeGestureLogs,
+      police: todayBreakdown.policeRecords,
+      driver: todayBreakdown.driverRecords,
+      logs: todayBreakdown.policeInferenceLogs,
     };
   }
   if (mode === 'success') {
     return {
-      police: breakdown.policeGestureRecords,
-      driver: breakdown.driverGestureRecords,
-      logs: breakdown.policeGestureLogsSuccess,
+      police: breakdown.policeRecordsSuccess,
+      driver: breakdown.driverRecordsSuccess,
+      logs: breakdown.policeInferenceLogsSuccess,
     };
   }
   return {
-    police: breakdown.policeGestureRecords,
-    driver: breakdown.driverGestureRecords,
-    logs: breakdown.policeGestureLogs,
+    police: breakdown.policeRecords,
+    driver: breakdown.driverRecords,
+    logs: breakdown.policeInferenceLogs,
   };
 }
 
@@ -114,9 +121,9 @@ const DashboardGestureStats: React.FC = () => {
   const meta = modeMeta[mode] ?? modeMeta.total;
 
   const totalValue = useMemo(() => {
-    if (mode === 'today') return stats?.todayGestures ?? 0;
-    if (mode === 'success') return stats?.successGestures ?? 0;
-    return stats?.totalGestures ?? 0;
+    if (mode === 'today') return stats?.gestureRecordToday ?? 0;
+    if (mode === 'success') return stats?.gestureRecordSuccess ?? 0;
+    return stats?.gestureRecordTotal ?? 0;
   }, [mode, stats]);
 
   const setTab = (next: GestureStatsTab) => {
@@ -146,6 +153,14 @@ const DashboardGestureStats: React.FC = () => {
         }
       />
 
+      <Paragraph type="secondary" style={{ marginTop: -8, marginBottom: 16 }}>
+        主指标均来自识别记录表：累计 {stats?.gestureRecordTotal ?? 0} · 今日{' '}
+        {stats?.gestureRecordToday ?? 0} · 成功 {stats?.gestureRecordSuccess ?? 0}
+        {stats && stats.gestureRecordTodaySuccess > 0
+          ? `（今日成功 ${stats.gestureRecordTodaySuccess}）`
+          : ''}
+      </Paragraph>
+
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={24} sm={8}>
           <Card>
@@ -169,7 +184,11 @@ const DashboardGestureStats: React.FC = () => {
         </Col>
         <Col xs={8} sm={6}>
           <Card size="small">
-            <Statistic title="推理日志" value={tabCounts.logs} valueStyle={{ fontSize: 20 }} />
+            <Statistic
+              title="交警推理日志"
+              value={tabCounts.logs}
+              valueStyle={{ fontSize: 20 }}
+            />
           </Card>
         </Col>
       </Row>
@@ -179,7 +198,7 @@ const DashboardGestureStats: React.FC = () => {
         size="large"
         value={tab}
         onChange={(v) => setTab(v as GestureStatsTab)}
-        style={{ marginBottom: 20 }}
+        style={{ marginBottom: 12 }}
         options={[
           {
             label: (
@@ -210,6 +229,11 @@ const DashboardGestureStats: React.FC = () => {
           },
         ]}
       />
+      {tab === 'logs' && (
+        <Text type="secondary" style={{ display: 'block', marginBottom: 16 }}>
+          推理日志为交警模块的逐段/逐帧明细，不计入上方三项主指标，仅供排查参考。
+        </Text>
+      )}
 
       <Card>
         {tab === 'police' && (
