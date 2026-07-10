@@ -24,7 +24,9 @@ import numpy as np
 from PIL import Image
 
 from app.utils.logger import logger
+from app.services.record_service import build_gesture_summary
 from app.services.police_gesture_logger import (
+    GESTURE_LOG_LEVEL,
     GestureLogEntry,
     log_gesture_async,
     log_gestures_batch_async,
@@ -397,6 +399,8 @@ _stream_frame_count: dict[str, int] = {}       # 流已处理的帧计数
 _stream_start_times: dict[str, float] = {}     # 流开始时间
 _stream_stable_results: dict[str, dict] = {}   # 当前稳定输出
 _stream_candidates: dict[str, dict] = {}       # 等待确认的候选输出
+_stream_stats: dict[str, dict] = {}            # 推理耗时统计 (用于周期性日志输出)
+_stream_pose_skip_counters: dict[str, int] = {}  # 姿势质量不足跳过计数 (用于节流日志)
 
 
 def reset_stream_state(stream_id: str = "default") -> None:
@@ -408,6 +412,69 @@ def reset_stream_state(stream_id: str = "default") -> None:
     _stream_start_times.pop(stream_id, None)
     _stream_stable_results.pop(stream_id, None)
     _stream_candidates.pop(stream_id, None)
+    _stream_stats.pop(stream_id, None)
+    _stream_pose_skip_counters.pop(stream_id, None)
+
+
+def _write_stream_recognition_record(
+    *,
+    record_type: str,
+    source_type: str,
+    success: bool,
+    summary: str,
+    result: dict | None = None,
+    file_name: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    """同步写入 RecognitionRecord (用于流式端点, 使用独立 Session)"""
+    import json as _json
+    from app.core.database import SessionLocal
+    from app.models.db_models import HistoryRecord, RecognitionRecord
+
+    db = SessionLocal()
+    try:
+        payload: dict = {}
+        if isinstance(result, dict):
+            payload = dict(result)
+        payload.pop("frames", None)
+        payload.pop("segments", None)
+        if file_name:
+            payload["fileName"] = file_name
+        if source_type:
+            payload["sourceType"] = source_type
+        if session_id:
+            payload["sessionId"] = session_id
+        payload["success"] = success
+        payload["summary"] = summary
+
+        history = HistoryRecord(
+            type=record_type,
+            session_id=session_id,
+            image_url="",
+            result_json=_json.dumps(payload, ensure_ascii=False) if payload else None,
+        )
+        db.add(history)
+        db.flush()
+
+        confidence = None
+        if isinstance(result, dict):
+            confidence = result.get("confidence")
+
+        db.add(
+            RecognitionRecord(
+                type=record_type,
+                result_summary=summary[:255] if summary else None,
+                confidence=float(confidence) if confidence is not None else None,
+                success=success,
+            )
+        )
+        db.commit()
+        logger.debug("流式识别 RecognitionRecord 已写入: type=%s, summary=%s", record_type, summary)
+    except Exception as exc:
+        db.rollback()
+        logger.warning("流式识别 RecognitionRecord 写入失败 (非致命): %s", exc)
+    finally:
+        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -984,6 +1051,17 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
             elapsed * 1000,
         )
 
+        # 同步写入 RecognitionRecord (仪表盘统计依赖)
+        _write_stream_recognition_record(
+            record_type="police_gesture",
+            source_type="video_stream",
+            success=True,
+            summary=build_gesture_summary(result),
+            result=result,
+            file_name=filename,
+            session_id=video_session_id,
+        )
+
         # 异步写入云数据库日志: 每个手势段单独记录一条
         segments = result.get("segments", [])
         if segments:
@@ -1028,6 +1106,15 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
         yield _sse_event("done", result)
     except Exception as e:
         logger.exception("交警手势流式视频识别失败: %s", e)
+        # 同步写入失败的 RecognitionRecord
+        _write_stream_recognition_record(
+            record_type="police_gesture",
+            source_type="video_stream",
+            success=False,
+            summary=f"识别失败: {e}",
+            file_name=filename,
+            session_id=video_session_id,
+        )
         # 异步写入失败日志到云数据库
         log_gesture_async(
             GestureLogEntry(
@@ -1164,6 +1251,12 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
     fc = _stream_frame_count.get(stream_id, 0) + 1
     _stream_frame_count[stream_id] = fc
 
+    # 首帧 & 入口日志 (DEBUG)
+    if fc == 1:
+        logger.info("实时流开始: stream_id=%s, 首帧大小=%dx%d", stream_id, img_array.shape[1], img_array.shape[0])
+    else:
+        logger.debug("实时流帧 #%d: stream_id=%s, size=%dx%d", fc, stream_id, img_array.shape[1], img_array.shape[0])
+
     # ---- LSTM 推理 ----
     inference_start = time.time()
     lstm_state = _stream_states.get(stream_id)
@@ -1212,6 +1305,43 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
         raw_conf = round(lstm_conf, 4)
     elapsed = time.time() - inference_start
 
+    # ---- 推理耗时统计 ----
+    stats = _stream_stats.setdefault(stream_id, {"times": [], "total_frames": 0, "skip_frames": 0})
+    stats["total_frames"] = fc
+    if state_updated:
+        stats["times"].append(elapsed * 1000)
+    else:
+        stats["skip_frames"] += 1
+
+    # ---- 预热期日志 (DEBUG) ----
+    if fc <= STREAM_WARMUP_FRAMES:
+        warmup_phase = "LSTM" if fc > STREAM_WARMUP_FRAMES else "融合"
+        logger.debug(
+            "实时流预热 #%d/%d [%s]: raw=%d(%.2f) lstm=%d(%.2f) single=%d(%.2f) fused=%d(%.2f) pose_q=%.2f valid=%s",
+            fc, STREAM_WARMUP_FRAMES, warmup_phase,
+            raw_gid, raw_conf, lstm_gid, lstm_conf, single_gid, single_conf,
+            raw_gid, raw_conf, pose_quality["score"], state_updated,
+        )
+
+    # ---- 预热完成日志 (INFO) ----
+    if fc == STREAM_WARMUP_FRAMES:
+        logger.info(
+            "实时流预热完成: stream_id=%s, 预热帧数=%d, 耗时=%.1fms",
+            stream_id, fc, elapsed * 1000,
+        )
+
+    # ---- 姿势质量不足日志 (DEBUG, 每10帧节流) ----
+    if not state_updated:
+        skip_cnt = _stream_pose_skip_counters.get(stream_id, 0) + 1
+        _stream_pose_skip_counters[stream_id] = skip_cnt
+        if skip_cnt % 10 == 1:
+            logger.debug(
+                "实时流姿势质量不足: stream_id=%s, frame=#%d, pose_q=%.3f, valid_kp=%d, skip_count=%d",
+                stream_id, fc, pose_quality["score"], pose_quality["validKeypoints"], skip_cnt,
+            )
+    else:
+        _stream_pose_skip_counters[stream_id] = 0
+
     # ---- 帧历史缓冲区 ----
     history: list[dict] = _stream_histories.get(stream_id, [])
     # 首帧参考时间 (转为相对秒)
@@ -1249,6 +1379,17 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
     raw_item["gesture"] = smoothed_gesture
     _stream_histories[stream_id] = history
 
+    # ---- 手势切换日志 (INFO) ----
+    if stable_changed and fc > STREAM_WARMUP_FRAMES:
+        old_stable = _stream_stable_results.get(stream_id)
+        old_gid = old_stable.get("gestureId", 0) if old_stable else 0
+        old_name = GESTURE_NAMES_CN[old_gid] if old_gid < len(GESTURE_NAMES_CN) else "未知"
+        if old_gid != best_gid:
+            logger.info(
+                "实时流手势切换: stream_id=%s, frame=#%d, %s(id=%d) → %s(id=%d), conf=%.2f, pose_q=%.2f",
+                stream_id, fc, old_name, old_gid, smoothed_gesture, best_gid, smoothed_conf, pose_quality["score"],
+            )
+
     # ---- 分段检测 (复用视频模式的 _build_segments) ----
     stable_history = [
         {
@@ -1274,6 +1415,12 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
             all_segments.append(last_seg)
             _stream_segments[stream_id] = all_segments
             segment_changed = True
+            seg_duration = round(last_seg["end"] - last_seg["start"], 2)
+            logger.info(
+                "实时流新段确认: stream_id=%s, frame=#%d, gesture=%s(id=%d), start=%.1fs, end=%.1fs, duration=%.1fs",
+                stream_id, fc, last_seg["gesture"], last_seg["gestureId"],
+                last_seg["start"], last_seg["end"], seg_duration,
+            )
 
     current_segment = all_segments[-1] if all_segments else None
 
@@ -1300,7 +1447,7 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
         for item in history[-10:]
     ]
 
-    # ---- 写入云数据库 (新段确认时) ----
+    # ---- 写入云数据库 (新段确认时 或 full模式每帧) ----
     if best_gid > 0 and segment_changed:
         log_gesture_async(
             GestureLogEntry(
@@ -1312,6 +1459,38 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
                 top5_json=build_top5_json(top5_list),
             )
         )
+    elif GESTURE_LOG_LEVEL == "full":
+        # full 模式: 每帧都写入 DB 日志
+        log_gesture_async(
+            GestureLogEntry(
+                recognition_type="camera_stream",
+                gesture=smoothed_gesture,
+                gesture_id=best_gid,
+                confidence=smoothed_conf,
+                inference_ms=round(elapsed * 1000, 1),
+                top5_json=build_top5_json(top5_list),
+                segments_json=build_segments_json(all_segments),
+            )
+        )
+
+    # ---- 周期性统计日志 (每50帧, INFO) ----
+    if fc % 50 == 0 and stats["times"]:
+        times_arr = stats["times"]
+        avg_ms = round(sum(times_arr) / len(times_arr), 1)
+        min_ms = round(min(times_arr), 1)
+        max_ms = round(max(times_arr), 1)
+        skip_pct = round(stats["skip_frames"] / max(1, fc) * 100, 1)
+        stream_duration = round(now - _stream_start_times.get(stream_id, now), 1)
+        logger.info(
+            "实时流统计 #%d: stream_id=%s, stable=%s(id=%d), conf=%.2f, "
+            "推理耗时 avg=%.1fms/min=%.1fms/max=%.1fms, 跳过帧=%d(%.1f%%), 流时长=%.1fs, 段数=%d",
+            fc, stream_id, smoothed_gesture, best_gid, smoothed_conf,
+            avg_ms, min_ms, max_ms, stats["skip_frames"], skip_pct,
+            stream_duration, len(all_segments),
+        )
+        # 重置统计窗口 (避免 long-tail 效应)
+        stats["times"] = []
+        stats["skip_frames"] = 0
 
     return {
         "code": 200,

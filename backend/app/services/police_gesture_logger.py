@@ -7,6 +7,7 @@
 """
 
 import json
+import os
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -18,6 +19,12 @@ from app.utils.logger import logger
 
 # 单线程池: 保证写入顺序, 避免数据库连接池耗尽
 _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="gesture-log")
+
+# DB 日志详细程度: "full" 每帧写入 / "segment" 仅写段确认 (默认) / "error" 仅写错误
+GESTURE_LOG_LEVEL = os.getenv("CARMATE_GESTURE_LOG_LEVEL", "segment").lower()
+if GESTURE_LOG_LEVEL not in {"full", "segment", "error"}:
+    logger.warning("无效的 CARMATE_GESTURE_LOG_LEVEL=%s, 回退到 segment", GESTURE_LOG_LEVEL)
+    GESTURE_LOG_LEVEL = "segment"
 
 
 @dataclass
@@ -83,14 +90,28 @@ def _write_log(entry: GestureLogEntry) -> None:
 
 def log_gesture_async(entry: GestureLogEntry) -> None:
     """异步提交日志写入任务 (不阻塞调用方)"""
+    # 按日志级别过滤
+    if _should_skip(entry):
+        return
     try:
         _executor.submit(_write_log, entry)
     except Exception as exc:
         logger.warning("提交手势日志任务失败 (非致命): %s", exc)
 
 
+def _should_skip(entry: GestureLogEntry) -> bool:
+    """根据 CARMATE_GESTURE_LOG_LEVEL 判断是否跳过该条日志"""
+    if GESTURE_LOG_LEVEL == "full":
+        return False
+    if GESTURE_LOG_LEVEL == "error":
+        return entry.success
+    # "segment" 模式: 由调用方控制 (service 层只在段确认时调用)
+    return False
+
+
 def log_gestures_batch_async(entries: list[GestureLogEntry]) -> None:
     """异步批量提交日志写入任务 (同一个事务中写入)"""
+    entries = [entry for entry in entries if not _should_skip(entry)]
     if not entries:
         return
 
