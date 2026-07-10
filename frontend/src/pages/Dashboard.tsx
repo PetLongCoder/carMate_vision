@@ -1,23 +1,23 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Card, Row, Col, Button, Segmented, Statistic, message } from 'antd';
+import { Row, Col, Card, Button, message } from 'antd';
 import {
   CameraOutlined,
   AimOutlined,
   AlertOutlined,
-  ReloadOutlined,
-  DashboardOutlined,
+  CarOutlined,
   CheckCircleOutlined,
+  ReloadOutlined,
   RiseOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { PageHeader, Loading } from '../components/common';
-import DashboardRecordTable from '../components/dashboard/DashboardRecordTable';
-import DashboardPoliceLogsTable from '../components/dashboard/DashboardPoliceLogsTable';
-import DashboardAlertsTable from '../components/dashboard/DashboardAlertsTable';
+import StatCard from '../components/dashboard/StatCard';
+import GestureBreakdownDrawer, {
+  type GestureDrawerMode,
+} from '../components/dashboard/GestureBreakdownDrawer';
 import { getDashboardStats } from '../api/stats';
-import type { DashboardStats as StatsType, GestureBreakdown } from '../types';
-
-type DashboardCategory = 'overview' | 'plate' | 'gesture' | 'alerts';
-type GestureSubCategory = 'police' | 'driver' | 'logs';
+import type { DashboardStats as StatsType, GestureBreakdown, TodayGestureBreakdown } from '../types';
+import { buildAlertsPath, buildRecognitionRecordsPath } from '../utils/dashboardNav';
 
 const emptyBreakdown: GestureBreakdown = {
   policeGestureRecords: 0,
@@ -26,13 +26,64 @@ const emptyBreakdown: GestureBreakdown = {
   policeGestureLogsSuccess: 0,
 };
 
+const emptyTodayBreakdown: TodayGestureBreakdown = {
+  policeGestureRecords: 0,
+  driverGestureRecords: 0,
+  policeGestureLogs: 0,
+};
+
+const shortcuts = [
+  {
+    path: '/plate',
+    icon: <CameraOutlined style={{ fontSize: 48, color: '#fff' }} />,
+    bg: 'linear-gradient(135deg, #1677ff 0%, #69b1ff 100%)',
+    title: '车牌识别',
+    desc: '上传图片或开启摄像头，自动识别车牌号码与颜色',
+  },
+  {
+    path: '/police-gesture',
+    icon: <AimOutlined style={{ fontSize: 48, color: '#fff' }} />,
+    bg: 'linear-gradient(135deg, #722ed1 0%, #b37feb 100%)',
+    title: '交警手势识别',
+    desc: '识别交警8种手势信号，辅助安全驾驶决策',
+  },
+  {
+    path: '/driver-gesture',
+    icon: <CarOutlined style={{ fontSize: 48, color: '#fff' }} />,
+    bg: 'linear-gradient(135deg, #52c41a 0%, #95de64 100%)',
+    title: '车主手势控车',
+    desc: '识别车主手势，实现隔空控制车载设备',
+  },
+  {
+    path: '/alerts',
+    icon: <AlertOutlined style={{ fontSize: 48, color: '#fff' }} />,
+    bg: 'linear-gradient(135deg, #fa541c 0%, #ff9c6e 100%)',
+    title: '告警中心',
+    desc: '实时监控系统日志，接收智能告警推送',
+  },
+  {
+    path: '/admin/recognition-records',
+    icon: <CameraOutlined style={{ fontSize: 48, color: '#fff' }} />,
+    bg: 'linear-gradient(135deg, #08979c 0%, #5cdbd3 100%)',
+    title: '识别记录管理',
+    desc: '查看全部用户的识别记录，支持筛选与详情',
+  },
+  {
+    path: '/admin/operation-logs',
+    icon: <CheckCircleOutlined style={{ fontSize: 48, color: '#fff' }} />,
+    bg: 'linear-gradient(135deg, #531dab 0%, #9254de 100%)',
+    title: '用户操作日志',
+    desc: '审计登录、注册、资料变更等账号操作',
+  },
+];
+
 const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<StatsType | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [category, setCategory] = useState<DashboardCategory>('overview');
-  const [gestureSub, setGestureSub] = useState<GestureSubCategory>('police');
-  const [alertSub, setAlertSub] = useState<'all' | 'unread'>('all');
+  const [gestureDrawerOpen, setGestureDrawerOpen] = useState(false);
+  const [gestureDrawerMode, setGestureDrawerMode] = useState<GestureDrawerMode>('total');
 
   const loadStats = useCallback(async (silent = false) => {
     if (!silent) {
@@ -55,163 +106,21 @@ const Dashboard: React.FC = () => {
     void loadStats();
   }, [loadStats]);
 
+  const openGestureDrawer = (mode: GestureDrawerMode) => {
+    setGestureDrawerMode(mode);
+    setGestureDrawerOpen(true);
+  };
+
   if (loading) return <Loading tip="正在加载统计数据..." />;
 
   const breakdown = stats?.gestureBreakdown ?? emptyBreakdown;
-
-  const renderOverview = () => (
-    <Row gutter={[16, 16]}>
-      <Col xs={12} sm={8} lg={4}>
-        <Card>
-          <Statistic
-            title="车牌识别"
-            value={stats?.totalPlates ?? 0}
-            prefix={<CameraOutlined />}
-            valueStyle={{ color: '#1677ff' }}
-          />
-        </Card>
-      </Col>
-      <Col xs={12} sm={8} lg={4}>
-        <Card>
-          <Statistic
-            title="手势识别"
-            value={stats?.totalGestures ?? 0}
-            prefix={<AimOutlined />}
-            valueStyle={{ color: '#52c41a' }}
-          />
-        </Card>
-      </Col>
-      <Col xs={12} sm={8} lg={4}>
-        <Card>
-          <Statistic
-            title="今日手势"
-            value={stats?.todayGestures ?? 0}
-            prefix={<RiseOutlined />}
-            valueStyle={{ color: '#722ed1' }}
-          />
-        </Card>
-      </Col>
-      <Col xs={12} sm={8} lg={4}>
-        <Card>
-          <Statistic
-            title="手势成功"
-            value={stats?.successGestures ?? 0}
-            prefix={<CheckCircleOutlined />}
-            valueStyle={{ color: '#13c2c2' }}
-          />
-        </Card>
-      </Col>
-      <Col xs={12} sm={8} lg={4}>
-        <Card>
-          <Statistic
-            title="告警总数"
-            value={stats?.totalAlerts ?? 0}
-            prefix={<AlertOutlined />}
-            valueStyle={{ color: '#faad14' }}
-          />
-        </Card>
-      </Col>
-      <Col xs={12} sm={8} lg={4}>
-        <Card>
-          <Statistic
-            title="未读告警"
-            value={stats?.unreadAlerts ?? 0}
-            prefix={<AlertOutlined />}
-            valueStyle={{ color: stats?.unreadAlerts ? '#ff4d4f' : '#52c41a' }}
-          />
-        </Card>
-      </Col>
-    </Row>
-  );
-
-  const renderPlate = () => (
-    <Card
-      title={
-        <span>
-          车牌识别 <span style={{ color: '#1677ff', fontWeight: 600 }}>{stats?.totalPlates ?? 0}</span>{' '}
-          次
-        </span>
-      }
-    >
-      <DashboardRecordTable type="plate" />
-    </Card>
-  );
-
-  const renderGesture = () => (
-    <Card
-      title="手势识别"
-      extra={
-        <span style={{ color: '#999', fontSize: 13 }}>
-          总计 {stats?.totalGestures ?? 0} · 今日 {stats?.todayGestures ?? 0} · 成功{' '}
-          {stats?.successGestures ?? 0}
-        </span>
-      }
-    >
-      <Segmented
-        block
-        style={{ marginBottom: 16 }}
-        value={gestureSub}
-        onChange={(v) => setGestureSub(v as GestureSubCategory)}
-        options={[
-          {
-            label: `交警手势（识别历史） ${breakdown.policeGestureRecords}`,
-            value: 'police',
-          },
-          {
-            label: `车主手势（识别历史） ${breakdown.driverGestureRecords}`,
-            value: 'driver',
-          },
-          {
-            label: `推理日志 ${breakdown.policeGestureLogs}`,
-            value: 'logs',
-          },
-        ]}
-      />
-      {gestureSub === 'police' && <DashboardRecordTable type="police_gesture" />}
-      {gestureSub === 'driver' && <DashboardRecordTable type="driver_gesture" />}
-      {gestureSub === 'logs' && <DashboardPoliceLogsTable />}
-    </Card>
-  );
-
-  const renderAlerts = () => (
-    <Card
-      title={
-        <span>
-          告警{' '}
-          <span style={{ color: '#faad14', fontWeight: 600 }}>{stats?.totalAlerts ?? 0}</span> 条
-          {stats?.unreadAlerts ? (
-            <span style={{ color: '#ff4d4f', marginLeft: 12, fontSize: 14 }}>
-              未读 {stats.unreadAlerts}
-            </span>
-          ) : null}
-        </span>
-      }
-    >
-      <Segmented
-        style={{ marginBottom: 16 }}
-        value={alertSub}
-        onChange={(v) => setAlertSub(v as 'all' | 'unread')}
-        options={[
-          { label: '全部告警', value: 'all' },
-          { label: `未读告警 (${stats?.unreadAlerts ?? 0})`, value: 'unread' },
-        ]}
-      />
-      <DashboardAlertsTable acknowledged={alertSub === 'unread' ? false : undefined} />
-    </Card>
-  );
-
-  const panels: Record<DashboardCategory, React.ReactNode> = {
-    overview: renderOverview(),
-    plate: renderPlate(),
-    gesture: renderGesture(),
-    alerts: renderAlerts(),
-  };
+  const todayBreakdown = stats?.todayGestureBreakdown ?? emptyTodayBreakdown;
 
   return (
     <div>
       <PageHeader
         title="控制面板"
-        subtitle="CarMate 智能车载视觉系统总览"
+        subtitle="CarMate 智能车载视觉系统总览（点击卡片查看明细）"
         extra={
           <Button icon={<ReloadOutlined />} loading={refreshing} onClick={() => void loadStats(true)}>
             刷新
@@ -219,25 +128,96 @@ const Dashboard: React.FC = () => {
         }
       />
 
-      <Segmented
-        block
-        size="large"
-        value={category}
-        onChange={(v) => setCategory(v as DashboardCategory)}
-        style={{ marginBottom: 24 }}
-        options={[
-          { label: '总览', value: 'overview', icon: <DashboardOutlined /> },
-          { label: '车牌识别', value: 'plate', icon: <CameraOutlined /> },
-          {
-            label: '手势识别',
-            value: 'gesture',
-            icon: <AimOutlined />,
-          },
-          { label: '告警', value: 'alerts', icon: <AlertOutlined /> },
-        ]}
-      />
+      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+        <Col xs={12} sm={8} lg={4}>
+          <StatCard
+            title="车牌识别总数"
+            value={stats?.totalPlates ?? 0}
+            prefix={<CameraOutlined />}
+            valueStyle={{ color: '#1677ff' }}
+            onClick={() => navigate(buildRecognitionRecordsPath({ type: 'plate' }))}
+          />
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <StatCard
+            title="手势识别总数"
+            value={stats?.totalGestures ?? 0}
+            prefix={<AimOutlined />}
+            valueStyle={{ color: '#52c41a' }}
+            onClick={() => openGestureDrawer('total')}
+          />
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <StatCard
+            title="今日手势识别"
+            value={stats?.todayGestures ?? 0}
+            prefix={<RiseOutlined />}
+            valueStyle={{ color: '#722ed1' }}
+            onClick={() => openGestureDrawer('today')}
+          />
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <StatCard
+            title="手势识别成功"
+            value={stats?.successGestures ?? 0}
+            prefix={<CheckCircleOutlined />}
+            valueStyle={{ color: '#13c2c2' }}
+            onClick={() => openGestureDrawer('success')}
+          />
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <StatCard
+            title="告警总数"
+            value={stats?.totalAlerts ?? 0}
+            prefix={<AlertOutlined />}
+            valueStyle={{ color: '#faad14' }}
+            onClick={() => navigate(buildAlertsPath())}
+          />
+        </Col>
+        <Col xs={12} sm={8} lg={4}>
+          <StatCard
+            title="未读告警"
+            value={stats?.unreadAlerts ?? 0}
+            prefix={<CarOutlined />}
+            valueStyle={{ color: stats?.unreadAlerts ? '#ff4d4f' : '#52c41a' }}
+            onClick={() => navigate(buildAlertsPath({ acknowledged: false }))}
+          />
+        </Col>
+      </Row>
 
-      {panels[category]}
+      <Row gutter={[16, 16]}>
+        {shortcuts.map((item) => (
+          <Col xs={24} sm={12} lg={8} key={item.path}>
+            <Card
+              hoverable
+              onClick={() => navigate(item.path)}
+              cover={
+                <div
+                  style={{
+                    height: 120,
+                    background: item.bg,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  {item.icon}
+                </div>
+              }
+            >
+              <Card.Meta title={item.title} description={item.desc} />
+            </Card>
+          </Col>
+        ))}
+      </Row>
+
+      <GestureBreakdownDrawer
+        open={gestureDrawerOpen}
+        mode={gestureDrawerMode}
+        breakdown={breakdown}
+        todayBreakdown={todayBreakdown}
+        onClose={() => setGestureDrawerOpen(false)}
+      />
     </div>
   );
 };
