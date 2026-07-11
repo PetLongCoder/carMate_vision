@@ -1,29 +1,33 @@
-import React, { useState } from 'react';
-import { Card, Button, Space, Tag, Slider, Row, Col } from 'antd';
+import React, { useState, useRef, useEffect } from 'react';
+import { Card, Button, Space, Tag, Slider, Row, Col, Switch } from 'antd';
 import { SoundOutlined, FireOutlined, StepForwardOutlined, StepBackwardOutlined, PlayCircleOutlined, PauseCircleOutlined, CameraOutlined, StopOutlined } from '@ant-design/icons';
 import { PageHeader } from '../components/common';
 import { useAppStore } from '../store';
 import { uploadDriverGestureImage } from '../api';
 import request from '../api/request';
 
+const HAND_CONNECTIONS = [
+  [0, 1], [1, 2], [2, 3], [3, 4],
+  [0, 5], [5, 6], [6, 7], [7, 8],
+  [0, 9], [9, 10], [10, 11], [11, 12],
+  [0, 13], [13, 14], [14, 15], [15, 16],
+  [0, 17], [17, 18], [18, 19], [19, 20],
+  [5, 9], [9, 13], [13, 17]
+];
+
 const ControlPanel: React.FC = () => {
   const { volume, temperature, setVolume, setTemperature } = useAppStore();
-
   return (
     <Card title="车载中控面板" style={{ height: '100%' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span><SoundOutlined style={{ marginRight: 8 }} />音量</span>
-            <Tag color="blue">{volume}</Tag>
-          </div>
+          <span><SoundOutlined style={{ marginRight: 8 }} />音量</span>
+          <Tag color="blue">{volume}</Tag>
           <Slider value={volume} onChange={setVolume} />
         </div>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <span><FireOutlined style={{ marginRight: 8 }} />温度</span>
-            <Tag color="orange">{temperature}°C</Tag>
-          </div>
+          <span><FireOutlined style={{ marginRight: 8 }} />温度</span>
+          <Tag color="orange">{temperature}°C</Tag>
           <Slider value={temperature} onChange={setTemperature} min={16} max={32} />
         </div>
         <div>
@@ -43,44 +47,112 @@ const ControlPanel: React.FC = () => {
 const DriverGesture: React.FC = () => {
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [streamActive, setStreamActive] = useState(false);
-  // 直接从 store 中获取最新值
   const { volume, temperature, setVolume, setTemperature } = useAppStore();
+
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
+  const [mirrorX, setMirrorX] = useState(true); // 开关控制，默认true
+
+  const drawHand = (landmarks: number[][]) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const { width, height } = canvas;
+
+    ctx.clearRect(0, 0, width, height);
+
+    if (!landmarks || landmarks.length !== 21) return;
+
+    // 根据开关决定是否翻转x
+    const pts = landmarks.map(([x, y]) => ({
+      x: mirrorX ? width - x : x,
+      y
+    }));
+
+    ctx.strokeStyle = '#00ff00';
+    ctx.lineWidth = 2;
+    for (const [i, j] of HAND_CONNECTIONS) {
+      if (i < pts.length && j < pts.length) {
+        ctx.beginPath();
+        ctx.moveTo(pts[i].x, pts[i].y);
+        ctx.lineTo(pts[j].x, pts[j].y);
+        ctx.stroke();
+      }
+    }
+
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, 2 * Math.PI);
+      ctx.fillStyle = '#00ff00';
+      ctx.fill();
+    }
+  };
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const updateCanvasSize = () => {
+      if (video.videoWidth && video.videoHeight) {
+        setCanvasSize({ width: video.videoWidth, height: video.videoHeight });
+      }
+    };
+    video.addEventListener('loadedmetadata', updateCanvasSize);
+    video.addEventListener('resize', updateCanvasSize);
+    return () => {
+      video.removeEventListener('loadedmetadata', updateCanvasSize);
+      video.removeEventListener('resize', updateCanvasSize);
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      canvas.width = canvasSize.width;
+      canvas.height = canvasSize.height;
+    }
+  }, [canvasSize]);
 
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       setStreamActive(true);
+      await request.post('/driver-gesture/reset');
 
-      // 调用后端重置追踪器状态（冷启动解锁）
-      try {
-        await request.post('/driver-gesture/reset');
-        console.log('✅ 手势追踪器已重置');
-      } catch (err) {
-        console.warn('重置追踪器失败:', err);
-      }
-
-      const videoElement = document.querySelector('video') as HTMLVideoElement;
+      const videoElement = videoRef.current;
       if (videoElement) {
         videoElement.srcObject = stream;
         videoElement.style.opacity = '1';
         await videoElement.play();
+        setCanvasSize({
+          width: videoElement.videoWidth,
+          height: videoElement.videoHeight,
+        });
       }
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      let latestBlob: Blob | null = null;
+      let processing = false;
 
-      const timer = setInterval(async () => {
-        const video = document.querySelector('video') as HTMLVideoElement;
+      const captureInterval = setInterval(() => {
+        const video = videoRef.current;
         if (!video || video.readyState < 2) return;
-
+        const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
         ctx?.drawImage(video, 0, 0);
+        canvas.toBlob((blob) => {
+          if (blob) latestBlob = blob;
+        }, 'image/jpeg', 0.8);
+      }, 33);
 
-        const blob = await new Promise<Blob | null>((resolve) => {
-          canvas.toBlob(resolve, 'image/jpeg', 0.8);
-        });
-        if (!blob) return;
+      const processInterval = setInterval(async () => {
+        if (processing || !latestBlob) return;
+        processing = true;
+        const blob = latestBlob;
+        latestBlob = null;
 
         const file = new File([blob], 'frame.jpg', { type: 'image/jpeg' });
         try {
@@ -89,10 +161,20 @@ const DriverGesture: React.FC = () => {
             const result = res.data.data;
             const gestureName = result.gesture;
             const action = result.controlAction;
+            const landmarks = result.landmarks;
 
             setLastAction(`${gestureName} → ${action?.label || gestureName}`);
 
-            // 直接使用最新的 volume 和 temperature 值更新
+            if (landmarks && landmarks.length === 21) {
+              drawHand(landmarks);
+            } else {
+              const canvasEl = canvasRef.current;
+              if (canvasEl) {
+                const ctx2 = canvasEl.getContext('2d');
+                ctx2?.clearRect(0, 0, canvasEl.width, canvasEl.height);
+              }
+            }
+
             if (action) {
               switch (action.type) {
                 case 'volume_up':
@@ -107,15 +189,6 @@ const DriverGesture: React.FC = () => {
                 case 'temperature_down':
                   setTemperature(Math.max(temperature - 1, 16));
                   break;
-                case 'next_track':
-                  // 下一首（UI 反馈由按钮高亮实现）
-                  break;
-                case 'prev_track':
-                  // 上一首
-                  break;
-                case 'play_pause':
-                  // 播放/暂停
-                  break;
                 default:
                   break;
               }
@@ -123,10 +196,13 @@ const DriverGesture: React.FC = () => {
           }
         } catch (err) {
           console.warn('手势识别请求失败:', err);
+        } finally {
+          processing = false;
         }
-      }, 250); // 每250ms识别一次（≈4帧/秒）
+      }, 200);
 
-      (window as any).__gestureTimer = timer;
+      (window as any).__captureInterval = captureInterval;
+      (window as any).__processInterval = processInterval;
 
     } catch (err) {
       console.error('摄像头启动失败:', err);
@@ -136,8 +212,9 @@ const DriverGesture: React.FC = () => {
 
   const stopCamera = () => {
     setStreamActive(false);
-    clearInterval((window as any).__gestureTimer);
-    const video = document.querySelector('video') as HTMLVideoElement;
+    clearInterval((window as any).__captureInterval);
+    clearInterval((window as any).__processInterval);
+    const video = videoRef.current;
     if (video && video.srcObject) {
       const tracks = (video.srcObject as MediaStream).getTracks();
       tracks.forEach(track => track.stop());
@@ -145,12 +222,17 @@ const DriverGesture: React.FC = () => {
       video.style.opacity = '0.3';
     }
     setLastAction(null);
+    const canvasEl = canvasRef.current;
+    if (canvasEl) {
+      const ctx = canvasEl.getContext('2d');
+      ctx?.clearRect(0, 0, canvasEl.width, canvasEl.height);
+    }
   };
 
   return (
     <div>
-      <PageHeader 
-        title="车主手势控车" 
+      <PageHeader
+        title="车主手势控车"
         subtitle="通过摄像头识别车主手势，实现隔空控制车载设备"
         extra={
           <Space>
@@ -159,17 +241,24 @@ const DriverGesture: React.FC = () => {
             ) : (
               <Button icon={<CameraOutlined />} type="primary" onClick={startCamera}>开启摄像头</Button>
             )}
+            <Switch
+              checkedChildren="手部骨骼镜像"
+              unCheckedChildren="手部骨骼镜像"
+              checked={mirrorX}
+              onChange={setMirrorX}
+            />
           </Space>
         }
       />
 
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={14}>
-          <Card title="摄像头画面" style={{ minHeight: 400 }}>
-            <div style={{ width: '100%', height: 360, background: '#1a1a1a', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+          <Card title="摄像头画面" style={{ minHeight: 400, position: 'relative' }}>
+            <div style={{ width: '100%', height: 360, background: '#1a1a1a', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative', overflow: 'hidden' }}>
               {streamActive ? (
                 <>
-                  <video autoPlay style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8, opacity: 0.3 }} />
+                  <video ref={videoRef} autoPlay style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 8, opacity: 0.3 }} />
+                  <canvas ref={canvasRef} style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }} width={canvasSize.width} height={canvasSize.height} />
                   <div style={{ position: 'absolute', textAlign: 'center', color: '#fff' }}>
                     <CameraOutlined style={{ fontSize: 48, marginBottom: 12, display: 'block' }} />
                     <span>摄像头已开启</span>

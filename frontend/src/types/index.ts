@@ -146,6 +146,7 @@ export interface DriverGestureResult {
   gestureId: number;
   confidence: number;
   controlAction?: ControlAction;
+  landmarks?: number[][];  // 手部关键点
 }
 
 export interface ControlAction {

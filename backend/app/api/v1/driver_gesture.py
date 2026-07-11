@@ -19,12 +19,13 @@ GESTURE_MAP = {
     "thumb_down": {"id": 3, "name": "拇指向下"},
     "swipe_left": {"id": 4, "name": "向左滑动"},
     "swipe_right": {"id": 5, "name": "向右滑动"},
+    "rotate_cw": {"id": 6, "name": "画圈"},
+    "rotate_ccw": {"id": 6, "name": "画圈"},
     "circle": {"id": 6, "name": "画圈"},
     "no_hand": {"id": -1, "name": "未检测到手"},
     "unknown": {"id": -2, "name": "未知手势"},
 }
 
-# 按照你的要求重新映射
 ACTION_MAP = {
     "fist": ControlAction(type="play_pause", label="播放/暂停"),
     "thumb_up": ControlAction(type="volume_up", label="音量调高"),
@@ -32,22 +33,21 @@ ACTION_MAP = {
     "swipe_left": ControlAction(type="prev_track", label="上一首"),
     "swipe_right": ControlAction(type="next_track", label="下一首"),
     "open_palm": ControlAction(type="temperature_up", label="温度调高"),
+    "rotate_cw": ControlAction(type="temperature_down", label="温度调低"),
+    "rotate_ccw": ControlAction(type="temperature_down", label="温度调低"),
     "circle": ControlAction(type="temperature_down", label="温度调低"),
 }
-
 
 def _get_tracker():
     global _tracker
     if _tracker is None:
         try:
-            from app.services.hand_tracker import HandTracker
-
-            _tracker = HandTracker()
+            from app.services.lstm_tracker import LSTMGestureTracker
+            _tracker = LSTMGestureTracker()
         except Exception as exc:
             logger.error(f"车主手势模型加载失败: {exc}")
             raise HTTPException(status_code=503, detail="车主手势识别模块未就绪，请稍后重试") from exc
     return _tracker
-
 
 @router.post("/driver-gesture/recognize")
 async def recognize_driver_gesture(
@@ -96,9 +96,11 @@ async def recognize_driver_gesture(
     return {
         "code": 200,
         "message": "success",
-        "data": result.dict(),
+        "data": {
+            **result.dict(),
+            "landmarks": landmarks,
+        }
     }
-
 
 @router.post("/driver-gesture/reset")
 async def reset_gesture_tracker():
