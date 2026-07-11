@@ -119,7 +119,7 @@ def _env_float(name: str, default: float) -> float:
 class VehicleDetector:
     """YOLOv8 车辆检测器（辅助功能）"""
 
-    def __init__(self, model_path: str = "yolov8n.pt", conf: float = 0.5):
+    def __init__(self, model_path: str = "yolov8n.pt", conf: float = None):
         logger.info(f"正在加载 YOLOv8 模型: {model_path}")
         self.model = YOLO(model_path)
         # 显式使用 GPU
@@ -127,8 +127,8 @@ class VehicleDetector:
         if torch.cuda.is_available():
             self.model.to('cuda')
             logger.info("YOLOv8 已移至 GPU (CUDA)")
-        self.conf = conf
-        logger.info("YOLOv8 模型加载完成")
+        self.conf = conf if conf is not None else _env_float("CARMATE_YOLO_CONFIDENCE", 0.25)
+        logger.info(f"YOLOv8 模型加载完成 (conf={self.conf})")
 
     def detect(self, image: np.ndarray) -> list[dict]:
         """检测车辆，返回 bbox + 类型（car/bus/truck）"""
@@ -246,6 +246,9 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
             for i, p in enumerate(plates):
                 p["carId"] = i + 1
                 p["vehicleType"] = "unknown"
+                # 统一键名为驼峰式 plateNo（与车辆检测路径保持一致）
+                if "plate_no" in p and "plateNo" not in p:
+                    p["plateNo"] = p.pop("plate_no")
             return plates
         return []
 
