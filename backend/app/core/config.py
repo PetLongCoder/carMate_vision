@@ -13,7 +13,7 @@ if not _env_path.exists():
         shutil.copyfile(_example_path, _env_path)
         print(f"[setup] 已从 .env.example 自动创建 .env，请按需修改配置")
 
-load_dotenv()
+load_dotenv(_env_path, override=True)
 
 
 class Settings:
@@ -34,6 +34,15 @@ class Settings:
     )
 
     CODE_TTL_SECONDS: int = int(os.getenv("CODE_TTL_SECONDS", "300"))
+
+    # 邮箱验证码：mock=终端打日志；smtp=真实发送（QQ 邮箱等）
+    EMAIL_PROVIDER: str = os.getenv("EMAIL_PROVIDER", "mock")
+    SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT", "465"))
+    SMTP_USE_SSL: bool = os.getenv("SMTP_USE_SSL", "true").lower() == "true"
+    SMTP_USER: str = os.getenv("SMTP_USER", "")
+    SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+    SMTP_FROM: str = os.getenv("SMTP_FROM", "")
 
     WECHAT_MOCK_ENABLED: bool = os.getenv("WECHAT_MOCK_ENABLED", "true").lower() == "true"
     WECHAT_SESSION_TTL_SECONDS: int = int(os.getenv("WECHAT_SESSION_TTL_SECONDS", "300"))

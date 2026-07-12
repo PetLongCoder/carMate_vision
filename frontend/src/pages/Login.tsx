@@ -99,14 +99,8 @@ const Login: React.FC = () => {
     try {
       const email = emailForm.getFieldValue('email');
       await emailForm.validateFields(['email']);
-      await sendEmailCode({ email, scene: 'login' });
-      message.success(
-        import.meta.env.DEV
-          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
-            ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
-            : '验证码已发送（请在后端终端查看验证码）'
-          : '验证码已发送',
-      );
+      const tip = await sendEmailCode({ email, scene: 'login' });
+      message.success(tip);
     } catch (err) {
       notifyAuthError(err, navigate);
     }
@@ -303,7 +297,7 @@ const Login: React.FC = () => {
           >
             <div>账号密码：user/123456，admin/123456</div>
             <div>手机验证码：13800138000（Console 查看验证码）</div>
-            <div>邮箱验证码：user@example.com（Console 查看验证码）</div>
+            <div>邮箱验证码：需先在个人中心绑定真实邮箱</div>
           </div>
         )}
       </Card>

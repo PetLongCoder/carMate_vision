@@ -291,17 +291,18 @@ export async function verifySmsCode(data: VerifySmsCodeRequest): Promise<void> {
   await request.post<ApiResponse<null>>('/auth/sms/verify', data);
 }
 
-export async function sendEmailCode(data: SendEmailCodeRequest): Promise<void> {
+export async function sendEmailCode(data: SendEmailCodeRequest): Promise<string> {
   if (USE_MOCK) {
     await new Promise((r) => setTimeout(r, 400));
     const code = mockSendEmailCode(data);
     if (import.meta.env.DEV) {
       console.info(`[Mock Email] ${data.email} 验证码: ${code}`);
     }
-    return;
+    return '验证码已发送（开发环境请按 F12 在 Console 查看）';
   }
 
-  await request.post<ApiResponse<null>>('/auth/email/send', data);
+  const res = await request.post<ApiResponse<null>>('/auth/email/send', data);
+  return res.data.message || '验证码已发送';
 }
 
 export async function loginByPhone(data: PhoneLoginRequest): Promise<AuthResponse> {
@@ -378,8 +379,9 @@ export async function sendSecureSmsCode(scene: SecureCodeScene): Promise<void> {
   await request.post<ApiResponse<null>>('/auth/account/sms/send', { scene });
 }
 
-export async function sendSecureEmailCode(scene: SecureCodeScene): Promise<void> {
-  await request.post<ApiResponse<null>>('/auth/account/email/send', { scene });
+export async function sendSecureEmailCode(scene: SecureCodeScene): Promise<string> {
+  const res = await request.post<ApiResponse<null>>('/auth/account/email/send', { scene });
+  return res.data.message || '验证码已发送';
 }
 
 export async function unbindPhone(data: UnbindCodeRequest): Promise<User> {
