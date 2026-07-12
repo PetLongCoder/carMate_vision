@@ -5,6 +5,9 @@ import torch
 import torch.nn as nn
 from typing import Tuple, List
 
+# ============================================================
+# 1. 定义与训练时相同的 LSTM 模型结构
+# ============================================================
 class GestureLSTM(nn.Module):
     def __init__(self, input_size=63, hidden_size=128, num_layers=2, num_classes=None):
         super().__init__()
@@ -18,8 +21,20 @@ class GestureLSTM(nn.Module):
         return self.fc(out)
 
 
+# ============================================================
+# 2. LSTM 推理跟踪器
+# ============================================================
 class LSTMGestureTracker:
-    def __init__(self, model_path: str = "app/models/gesture_model.pth"):
+    def __init__(
+        self,
+        model_path: str = "app/models/gesture_model.pth",
+        lstm_threshold: float = 0.75,
+        stable_threshold: int = 2,
+    ):
+        self.lstm_threshold = lstm_threshold
+        self.stable_threshold = stable_threshold
+
+        # 加载 LSTM 模型
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         checkpoint = torch.load(model_path, map_location=device, weights_only=False)
         self.label_encoder = checkpoint['label_encoder']
@@ -39,11 +54,15 @@ class LSTMGestureTracker:
         self.model.eval()
         self.device = device
 
+        # 缓冲区：存储最近 seq_length 帧的63维关键点
         self.buffer = []
         self.last_gesture = "unknown"
         self.stable_count = 0
-        self.stable_threshold = 2
 
+        # 无手计数器：用于检测手是否移出画面
+        self.no_hand_count = 0
+
+        # MediaPipe
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
@@ -56,31 +75,35 @@ class LSTMGestureTracker:
         print(f"   手势类别: {list(self.label_encoder.classes_)}")
         print(f"   序列长度: {self.seq_length}")
         print(f"   运行设备: {self.device}")
+        print(f"   LSTM 置信度阈值: {self.lstm_threshold}")
 
     def reset_state(self):
         self.buffer = []
         self.last_gesture = "unknown"
         self.stable_count = 0
+        self.no_hand_count = 0
 
     def _extract_landmarks(self, hand_landmarks) -> List[float]:
         landmarks = []
         for lm in hand_landmarks.landmark:
             landmarks.extend([lm.x, lm.y, lm.z])
-        return landmarks
+        return landmarks  # 63维
 
     def process_frame(self, image_bytes: bytes) -> Tuple[str, float, List]:
+        # 1. 解码图像
         np_arr = np.frombuffer(image_bytes, np.uint8)
         frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         if frame is None:
             return "unknown", 0.0, []
 
-        # 镜像（与训练数据保持一致）
+        # 2. 镜像（与训练数据保持一致）
         frame = cv2.flip(frame, 1)
 
+        # 3. MediaPipe 手部检测
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = self.hands.process(rgb)
 
-        landmarks_pixel = []
+        landmarks_pixel = []  # 默认空，无手时保持空
         if result.multi_hand_landmarks:
             hand_lm = result.multi_hand_landmarks[0]
             h, w, _ = frame.shape
@@ -88,15 +111,28 @@ class LSTMGestureTracker:
                 landmarks_pixel.append([lm.x * w, lm.y * h, lm.z * w])
             vec = self._extract_landmarks(hand_lm)
             self.buffer.append(vec)
+            self.no_hand_count = 0
         else:
+            # 无手：填充全零，累加无手计数，且立即清空 landmarks_pixel
             self.buffer.append([0.0] * 63)
+            self.no_hand_count += 1
+            # 关键修复：无手时 landmarks_pixel 保持为空列表，前端将清空画布
+            landmarks_pixel = []
 
+        # 4. 如果连续 5 帧以上无手，直接返回 no_hand（不等缓冲区满）
+        if self.no_hand_count > 5:
+            self.last_gesture = "no_hand"
+            return "no_hand", 0.0, landmarks_pixel
+
+        # 保持缓冲区长度不超过 seq_length
         if len(self.buffer) > self.seq_length:
             self.buffer.pop(0)
 
+        # 如果缓冲区未满，返回上一帧结果（但 landmarks_pixel 已空，前端骨骼消失）
         if len(self.buffer) < self.seq_length:
             return self.last_gesture, 0.0, landmarks_pixel
 
+        # 5. LSTM 预测（滑动窗口）
         input_tensor = torch.FloatTensor(np.array(self.buffer)).unsqueeze(0).to(self.device)
         with torch.no_grad():
             output = self.model(input_tensor)
@@ -107,13 +143,24 @@ class LSTMGestureTracker:
 
         gesture_name = self.label_encoder.inverse_transform([pred_idx])[0]
 
+        # 针对特定手势提高阈值
+        if gesture_name == "rotate_ccw":
+            effective_threshold = 0.92
+        elif gesture_name == "rotate_cw":
+            effective_threshold = 0.85
+            
+        else:
+            effective_threshold = self.lstm_threshold
+
+        # 6. 防抖：连续相同手势才更新输出
         if gesture_name == self.last_gesture:
             self.stable_count += 1
         else:
             self.stable_count = 1
             self.last_gesture = gesture_name
 
-        if self.stable_count >= self.stable_threshold and confidence > 0.35:
+        # 7. 只有连续稳定且置信度足够才输出
+        if self.stable_count >= self.stable_threshold and confidence > effective_threshold:
             return gesture_name, confidence, landmarks_pixel
-
-        return self.last_gesture, confidence, landmarks_pixel
+        else:
+            return self.last_gesture, confidence, landmarks_pixel

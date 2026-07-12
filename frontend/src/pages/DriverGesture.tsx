@@ -15,7 +15,8 @@ const HAND_CONNECTIONS = [
   [5, 9], [9, 13], [13, 17]
 ];
 
-const ControlPanel: React.FC = () => {
+// ===== ControlPanel 接收 playState =====
+const ControlPanel: React.FC<{ playState: boolean }> = ({ playState }) => {
   const { volume, temperature, setVolume, setTemperature } = useAppStore();
   return (
     <Card title="车载中控面板" style={{ height: '100%' }}>
@@ -27,15 +28,20 @@ const ControlPanel: React.FC = () => {
         </div>
         <div>
           <span><FireOutlined style={{ marginRight: 8 }} />温度</span>
-          <Tag color="orange">{temperature}°C</Tag>
+          {/* ✅ 温度显示向下取整 */}
+          <Tag color="orange">{Math.floor(temperature)}°C</Tag>
           <Slider value={temperature} onChange={setTemperature} min={16} max={32} />
         </div>
         <div>
           <div style={{ marginBottom: 8, fontWeight: 500 }}>媒体控制</div>
           <Space size="middle">
             <Button shape="circle" icon={<StepBackwardOutlined />} size="large" />
-            <Button shape="circle" icon={<PlayCircleOutlined />} size="large" type="primary" />
-            <Button shape="circle" icon={<PauseCircleOutlined />} size="large" />
+            <Button
+              shape="circle"
+              icon={playState ? <PauseCircleOutlined /> : <PlayCircleOutlined />}
+              size="large"
+              type="primary"
+            />
             <Button shape="circle" icon={<StepForwardOutlined />} size="large" />
           </Space>
         </div>
@@ -47,12 +53,23 @@ const ControlPanel: React.FC = () => {
 const DriverGesture: React.FC = () => {
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [streamActive, setStreamActive] = useState(false);
-  const { volume, temperature, setVolume, setTemperature } = useAppStore();
+  const { setVolume, setTemperature } = useAppStore();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
-  const [mirrorX, setMirrorX] = useState(true); // 开关控制，默认true
+  const [mirrorX, setMirrorX] = useState(true);
+
+  const [playState, setPlayState] = useState(false);
+
+  // ✅ 强制清空画布（独立函数，确保可靠）
+  const clearCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  };
 
   const drawHand = (landmarks: number[][]) => {
     const canvas = canvasRef.current;
@@ -63,9 +80,10 @@ const DriverGesture: React.FC = () => {
 
     ctx.clearRect(0, 0, width, height);
 
-    if (!landmarks || landmarks.length !== 21) return;
+    if (!landmarks || landmarks.length !== 21) {
+      return; // 无数据，已清空
+    }
 
-    // 根据开关决定是否翻转x
     const pts = landmarks.map(([x, y]) => ({
       x: mirrorX ? width - x : x,
       y
@@ -90,6 +108,11 @@ const DriverGesture: React.FC = () => {
       ctx.fill();
     }
   };
+
+  // 监听 canvas 尺寸变化，清空画布防止残留
+  useEffect(() => {
+    clearCanvas();
+  }, [canvasSize]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -163,32 +186,45 @@ const DriverGesture: React.FC = () => {
             const action = result.controlAction;
             const landmarks = result.landmarks;
 
+            // ✅ 更新显示文本
             setLastAction(`${gestureName} → ${action?.label || gestureName}`);
 
+            // ✅ 处理骨骼绘制：有数据时绘制，无数据时清空
             if (landmarks && landmarks.length === 21) {
               drawHand(landmarks);
             } else {
-              const canvasEl = canvasRef.current;
-              if (canvasEl) {
-                const ctx2 = canvasEl.getContext('2d');
-                ctx2?.clearRect(0, 0, canvasEl.width, canvasEl.height);
-              }
+              clearCanvas(); // 强制清空
             }
 
             if (action) {
               switch (action.type) {
-                case 'volume_up':
-                  setVolume(Math.min(volume + 5, 100));
+                case 'play_pause':
+                  if (gestureName === '握拳') {
+                    setPlayState(false);
+                  } else if (gestureName === '手掌张开') {
+                    setPlayState(true);
+                  }
                   break;
-                case 'volume_down':
-                  setVolume(Math.max(volume - 5, 0));
+                case 'volume_up': {
+                  const currentVolume = useAppStore.getState().volume;
+                  setVolume(Math.min(currentVolume + 2, 100));
                   break;
-                case 'temperature_up':
-                  setTemperature(Math.min(temperature + 1, 32));
+                }
+                case 'volume_down': {
+                  const currentVolume = useAppStore.getState().volume;
+                  setVolume(Math.max(currentVolume - 2, 0));
                   break;
-                case 'temperature_down':
-                  setTemperature(Math.max(temperature - 1, 16));
+                }
+                case 'temperature_up': {
+                  const currentTemp = useAppStore.getState().temperature;
+                  setTemperature(Math.min(currentTemp + 0.3, 32));
                   break;
+                }
+                case 'temperature_down': {
+                  const currentTemp = useAppStore.getState().temperature;
+                  setTemperature(Math.max(currentTemp - 0.3, 16));
+                  break;
+                }
                 default:
                   break;
               }
@@ -222,11 +258,7 @@ const DriverGesture: React.FC = () => {
       video.style.opacity = '0.3';
     }
     setLastAction(null);
-    const canvasEl = canvasRef.current;
-    if (canvasEl) {
-      const ctx = canvasEl.getContext('2d');
-      ctx?.clearRect(0, 0, canvasEl.width, canvasEl.height);
-    }
+    clearCanvas(); // 关闭时清空画布
   };
 
   return (
@@ -279,7 +311,7 @@ const DriverGesture: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={10}>
-          <ControlPanel />
+          <ControlPanel playState={playState} />
         </Col>
       </Row>
     </div>
