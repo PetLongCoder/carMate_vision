@@ -23,6 +23,7 @@ from app.api.v1 import (
     plate,
     police_gesture,
     alerts,
+    alert_stats,
     history,
     stats,
     wechat,
@@ -35,6 +36,9 @@ from app.services.session_manager import (
     session_manager,
 )
 from app.services.video_processor import run_video_session
+from app.services.alert_agent.alert_agent import alert_agent
+from app.services.alert_agent.event_collector import event_collector
+from app.services.alert_agent.ws_alert_manager import ws_alert_manager
 from app.utils.logger import logger
 
 
@@ -56,6 +60,16 @@ async def lifespan(app: FastAPI):
         logger.info("数据库初始化完成")
     except Exception as e:
         logger.warning(f"数据库初始化跳过: {e}")
+
+    # 初始化 AlertAgent 智能告警系统
+    try:
+        from app.core.config import settings as app_settings
+        alert_agent.set_cooldown(app_settings.ALERT_MIN_INTERVAL_SECONDS)
+        event_collector.set_alert_agent(alert_agent)
+        logger.info("AlertAgent 智能告警系统已初始化")
+    except Exception as e:
+        logger.warning(f"AlertAgent 初始化跳过: {e}")
+
     cleanup_task = asyncio.create_task(_cleanup_loop())
     yield
     cleanup_task.cancel()
@@ -87,6 +101,7 @@ app.include_router(driver_gesture.router, prefix="/api", tags=["车主手势控�
 app.include_router(plate.router, prefix="/api", tags=["车牌识别"])
 app.include_router(police_gesture.router, prefix="/api", tags=["交警手势识别"])
 app.include_router(alerts.router, prefix="/api", tags=["告警管理"])
+app.include_router(alert_stats.router, prefix="/api", tags=["告警统计"])
 app.include_router(history.router, prefix="/api", tags=["历史记录"])
 app.include_router(stats.router, prefix="/api", tags=["仪表盘统计"])
 
@@ -123,13 +138,27 @@ async def health_check():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    logger.info("WebSocket 客户端已连接 (通用)")
+    await ws_alert_manager.connect(websocket)
+    logger.info(f"WebSocket 客户端已连接 (通用), 当前连接数: {ws_alert_manager.active_count}")
     try:
         while True:
             data = await websocket.receive_text()
             logger.debug(f"WebSocket 收到: {data}")
+
+            # 尝试解析订阅消息
+            try:
+                import json as _json
+                msg = _json.loads(data)
+                if msg.get("type") == "subscribe" and msg.get("channel") == "alerts":
+                    await websocket.send_json({"type": "subscribed", "channel": "alerts"})
+                    logger.info("WebSocket 客户端已订阅告警推送")
+                    continue
+            except Exception:
+                pass
+
             await websocket.send_json({"type": "pong", "data": data})
     except WebSocketDisconnect:
+        await ws_alert_manager.disconnect(websocket)
         logger.info("WebSocket 客户端断开连接 (通用)")
 
 

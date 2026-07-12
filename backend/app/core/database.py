@@ -29,6 +29,7 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     ensure_wechat_columns()
+    ensure_alert_columns()
 
 
 def ensure_wechat_columns():
@@ -61,3 +62,37 @@ def ensure_wechat_columns():
                     "CREATE INDEX ix_history_records_session_id "
                     "ON history_records(session_id)"
                 ))
+
+
+def ensure_alert_columns():
+    """迁移：为 alert_records 表添加告警智能体所需的新字段"""
+    inspector = inspect(engine)
+    if "alert_records" not in inspector.get_table_names():
+        return
+
+    existing = {c["name"] for c in inspector.get_columns("alert_records")}
+    alert_migrations = [
+        ("acknowledged_by", "ALTER TABLE alert_records ADD COLUMN acknowledged_by VARCHAR(50) NULL"),
+        ("acknowledged_at", "ALTER TABLE alert_records ADD COLUMN acknowledged_at DATETIME NULL"),
+        ("anomaly_type", "ALTER TABLE alert_records ADD COLUMN anomaly_type VARCHAR(50) NULL"),
+        ("impact_scope", "ALTER TABLE alert_records ADD COLUMN impact_scope VARCHAR(200) NULL"),
+        ("suggested_actions", "ALTER TABLE alert_records ADD COLUMN suggested_actions TEXT NULL"),
+        ("raw_event", "ALTER TABLE alert_records ADD COLUMN raw_event TEXT NULL"),
+        ("notified_channels", "ALTER TABLE alert_records ADD COLUMN notified_channels VARCHAR(200) NULL"),
+    ]
+
+    with engine.begin() as conn:
+        for column_name, ddl in alert_migrations:
+            if column_name not in existing:
+                conn.execute(text(ddl))
+
+    # 创建 anomaly_type 索引
+    if "anomaly_type" not in existing:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "CREATE INDEX ix_alert_records_anomaly_type "
+                    "ON alert_records(anomaly_type)"
+                ))
+        except Exception:
+            pass  # 索引可能已存在

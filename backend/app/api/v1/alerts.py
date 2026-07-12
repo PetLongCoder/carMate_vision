@@ -1,4 +1,6 @@
 from typing import Optional
+import json
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -6,19 +8,40 @@ from sqlalchemy.orm import Session
 from app.api.v1.auth import ok, require_admin
 from app.core.database import get_db
 from app.models.db_models import AlertRecord, User
+from app.services.alert_agent import ANOMALY_TYPE_LABELS, SOURCE_LABELS
 
 router = APIRouter()
 
 
 def alert_to_dict(record: AlertRecord) -> dict:
+    """将 AlertRecord 转换为前端友好的字典"""
+    suggested_actions = []
+    if record.suggested_actions:
+        try:
+            suggested_actions = json.loads(record.suggested_actions)
+        except (json.JSONDecodeError, TypeError):
+            suggested_actions = [record.suggested_actions]
+
+    notified_channels = []
+    if record.notified_channels:
+        notified_channels = [c.strip() for c in record.notified_channels.split(",") if c.strip()]
+
     return {
         "id": record.id,
         "level": record.level,
         "title": record.title,
         "summary": record.summary or "",
         "source": record.source or "",
-        "createdAt": record.created_at.isoformat() if record.created_at else "",
+        "sourceLabel": SOURCE_LABELS.get(record.source or "", record.source or ""),
+        "anomalyType": record.anomaly_type or "",
+        "anomalyTypeLabel": ANOMALY_TYPE_LABELS.get(record.anomaly_type or "", record.anomaly_type or ""),
+        "impactScope": record.impact_scope or "",
+        "suggestedActions": suggested_actions,
+        "notifiedChannels": notified_channels,
         "acknowledged": record.acknowledged,
+        "acknowledgedBy": record.acknowledged_by,
+        "acknowledgedAt": record.acknowledged_at.isoformat() if record.acknowledged_at else None,
+        "createdAt": record.created_at.isoformat() if record.created_at else "",
     }
 
 
@@ -50,7 +73,7 @@ def get_alerts(
 @router.put("/alerts/{alert_id}/acknowledge")
 def acknowledge_alert(
     alert_id: int,
-    _: User = Depends(require_admin),
+    admin: User = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     record = db.query(AlertRecord).filter(AlertRecord.id == alert_id).first()
@@ -58,5 +81,7 @@ def acknowledge_alert(
         return {"code": 404, "message": "告警不存在", "data": None}
 
     record.acknowledged = True
+    record.acknowledged_by = admin.username
+    record.acknowledged_at = datetime.now(timezone.utc)
     db.commit()
     return ok(None)

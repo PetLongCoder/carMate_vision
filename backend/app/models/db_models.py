@@ -71,6 +71,13 @@ class AlertRecord(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(100))
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    acknowledged_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    anomaly_type: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    impact_scope: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    suggested_actions: Mapped[str | None] = mapped_column(Text, nullable=True, comment="JSON array of suggested actions")
+    raw_event: Mapped[str | None] = mapped_column(Text, nullable=True, comment="Original event data JSON")
+    notified_channels: Mapped[str | None] = mapped_column(String(200), nullable=True, comment="Comma-separated: websocket,feishu")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now(), index=True)
 
 

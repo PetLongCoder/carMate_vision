@@ -13,6 +13,8 @@ from app.api.v1.auth import get_current_user
 from app.core.database import get_db
 from app.models.db_models import PoliceGestureLog, User
 from app.services.record_service import build_gesture_summary, log_recognition
+from app.services.alert_agent.event_collector import event_collector
+from app.services.alert_agent import AnomalyEvent, AlertLevel
 from app.utils.logger import logger
 from app.services.police_gesture_service import (
     GESTURE_NAMES_CN,
@@ -120,6 +122,13 @@ async def recognize_police_gesture(
                 error_message=str(exc),
             )
         )
+        event_collector.collect(AnomalyEvent(
+            source="police_gesture",
+            anomaly_type="police_gesture_inference_error",
+            title="交警手势识别失败",
+            detail={"error": str(exc), "filename": file.filename},
+            severity_hint=AlertLevel.WARNING,
+        ))
         raise HTTPException(500, f"识别失败: {str(exc)}")
 
 

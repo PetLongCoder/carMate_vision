@@ -200,6 +200,45 @@ export function acknowledgeAlert(id: number) {
   return request.put<ApiResponse<null>>(`/alerts/${id}/acknowledge`);
 }
 
+export function batchAcknowledgeAlerts(ids: number[]) {
+  const params = new URLSearchParams();
+  ids.forEach((id) => params.append('ids', String(id)));
+  return request.put<ApiResponse<{ updated: number }>>(`/alerts/batch-acknowledge?${params.toString()}`);
+}
+
+export function getAlertStats(params?: { days?: number }) {
+  return request.get<ApiResponse<import('../types').AlertStats>>('/alerts/stats', { params });
+}
+
+export function getAlertTimeline(params?: {
+  page?: number;
+  pageSize?: number;
+  startDate?: string;
+  endDate?: string;
+  level?: string;
+  anomalyType?: string;
+}) {
+  return request.get<ApiResponse<{ list: Alert[]; total: number }>>('/alerts/timeline', { params });
+}
+
+export function getAlertDetail(alertId: number) {
+  return request.get<ApiResponse<Alert & { rawEvent?: object; relatedAlerts?: Alert[] }>>(`/alerts/${alertId}/detail`);
+}
+
+export function getAlertAnalysis(params?: { days?: number }) {
+  return request.get<ApiResponse<import('../types').AlertAnalysis>>('/alerts/analysis', { params });
+}
+
+export function getAnomalyTypes() {
+  return request.get<ApiResponse<import('../types').AnomalyTypeOption[]>>('/alerts/anomaly-types');
+}
+
+export function triggerTestAlert(anomalyType?: string, level?: string) {
+  return request.post<ApiResponse<{ alertId: number | null; message: string }>>('/alerts/test', null, {
+    params: { type: anomalyType, level },
+  });
+}
+
 // ═══════════════════════════════════════════════════════════
 //  历史记录
 // ═══════════════════════════════════════════════════════════
