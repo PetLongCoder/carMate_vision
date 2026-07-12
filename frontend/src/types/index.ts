@@ -343,7 +343,7 @@ export interface EmailLoginRequest {
 
 export type CodeScene = 'login' | 'register' | 'bind' | 'rebind_new';
 export type SecureCodeScene = 'unbind' | 'rebind_old' | 'delete' | 'change_password';
-export type VerifyMethod = 'password' | 'phone' | 'email';
+export type VerifyMethod = 'password' | 'phone' | 'email' | 'wechat';
 
 export interface SendSmsCodeRequest {
   phone: string;

@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, Tabs, Segmented, message, Typography, Divider } from 'antd';
-import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, MailOutlined, WechatOutlined } from '@ant-design/icons';
+import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, WechatOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { login, loginByPhone, loginByEmail, sendSmsCode, sendEmailCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
+import EmailInput from '../components/auth/EmailInput';
 import WechatLoginModal from '../components/auth/WechatLoginModal';
 import { emailFormRules } from '../utils/validation';
 import { notifyAuthError } from '../utils/notifyAuthError';
@@ -226,7 +227,7 @@ const Login: React.FC = () => {
               label="邮箱"
               rules={emailFormRules(true)}
             >
-              <Input prefix={<MailOutlined />} placeholder="请输入邮箱" size="large" />
+              <EmailInput placeholder="请输入邮箱" />
             </Form.Item>
 
             <Form.Item
