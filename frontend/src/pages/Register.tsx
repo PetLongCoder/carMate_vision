@@ -1,31 +1,20 @@
 import React, { useState } from 'react';
-import { Card, Form, Input, Button, message, Typography, Divider, Row, Col } from 'antd';
+import { Card, Form, Input, Button, message, Typography } from 'antd';
 import {
   LockOutlined,
   UserOutlined,
-  MailOutlined,
   CarOutlined,
   MobileOutlined,
-  SafetyCertificateOutlined,
-  IdcardOutlined,
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
 import { register, sendSmsCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
-import { emailFormRules } from '../utils/validation';
+import EmailInput from '../components/auth/EmailInput';
+import { emailFormRules, passwordFormRules, confirmPasswordRules, PASSWORD_HINT } from '../utils/validation';
 import { notifyAuthError } from '../utils/notifyAuthError';
 
 const { Title, Text } = Typography;
-
-const sectionTitleStyle: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  marginBottom: 16,
-  fontWeight: 600,
-  color: '#1f2937',
-};
 
 const Register: React.FC = () => {
   const [loading, setLoading] = useState(false);
@@ -92,8 +81,7 @@ const Register: React.FC = () => {
     >
       <Card
         style={{
-          width: '100%',
-          maxWidth: 760,
+          width: 440,
           borderRadius: 12,
           boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
         }}
@@ -108,124 +96,70 @@ const Register: React.FC = () => {
         </div>
 
         <Form form={form} layout="vertical" autoComplete="off" onFinish={handleSubmit}>
-          <Row gutter={[32, 0]}>
-            <Col xs={24} md={11}>
-              <div style={sectionTitleStyle}>
-                <SafetyCertificateOutlined style={{ color: '#1677ff' }} />
-                <span>手机验证</span>
-              </div>
+          <Form.Item
+            name="username"
+            label="用户名"
+            rules={[
+              { required: true, message: '请输入用户名' },
+              { min: 3, message: '用户名至少 3 个字符' },
+            ]}
+          >
+            <Input prefix={<UserOutlined />} placeholder="请输入用户名" size="large" />
+          </Form.Item>
 
-              <Form.Item
-                name="phone"
-                label="手机号"
-                rules={[
-                  { required: true, message: '请输入手机号' },
-                  { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号' },
-                ]}
-              >
-                <Input
-                  prefix={<MobileOutlined />}
-                  placeholder="请输入手机号"
-                  size="large"
-                  maxLength={11}
-                />
-              </Form.Item>
+          <Form.Item
+            name="phone"
+            label="手机号"
+            rules={[
+              { required: true, message: '请输入手机号' },
+              { pattern: /^1[3-9]\d{9}$/, message: '请输入正确的手机号' },
+            ]}
+          >
+            <Input
+              prefix={<MobileOutlined />}
+              placeholder="请输入手机号"
+              size="large"
+              maxLength={11}
+            />
+          </Form.Item>
 
-              <Form.Item
-                name="code"
-                label="短信验证码"
-                rules={[
-                  { required: true, message: '请输入验证码' },
-                  { len: 6, message: '验证码为 6 位数字' },
-                ]}
-              >
-                <VerificationCodeInput onSend={handleSendSmsCode} />
-              </Form.Item>
+          <Form.Item
+            name="code"
+            label="短信验证码"
+            rules={[
+              { required: true, message: '请输入验证码' },
+              { len: 6, message: '验证码为 6 位数字' },
+            ]}
+          >
+            <VerificationCodeInput onSend={handleSendSmsCode} />
+          </Form.Item>
 
-              <div
-                style={{
-                  padding: '12px 14px',
-                  background: '#f0f5ff',
-                  borderRadius: 8,
-                  fontSize: 12,
-                  color: '#597ef7',
-                  lineHeight: 1.7,
-                }}
-              >
-                手机号用于登录与安全验证，注册前请先获取并填写短信验证码。
-              </div>
-            </Col>
+          <Form.Item
+            name="email"
+            label="邮箱（可选）"
+            extra="填写后可使用邮箱验证码登录"
+            rules={emailFormRules(false)}
+          >
+            <EmailInput placeholder="请输入邮箱" />
+          </Form.Item>
 
-            <Col xs={0} md={2} style={{ display: 'flex', justifyContent: 'center' }}>
-              <Divider type="vertical" style={{ height: '100%', minHeight: 280, margin: 0 }} />
-            </Col>
+          <Form.Item
+            name="password"
+            label="密码"
+            extra={PASSWORD_HINT}
+            rules={passwordFormRules(true)}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" size="large" />
+          </Form.Item>
 
-            <Col xs={24} md={0}>
-              <Divider style={{ margin: '8px 0 20px' }} />
-            </Col>
-
-            <Col xs={24} md={11}>
-              <div style={sectionTitleStyle}>
-                <IdcardOutlined style={{ color: '#1677ff' }} />
-                <span>账号信息</span>
-              </div>
-
-              <Form.Item
-                name="username"
-                label="用户名"
-                rules={[
-                  { required: true, message: '请输入用户名' },
-                  { min: 3, message: '用户名至少 3 个字符' },
-                ]}
-              >
-                <Input prefix={<UserOutlined />} placeholder="请输入用户名" size="large" />
-              </Form.Item>
-
-              <Form.Item
-                name="email"
-                label="邮箱（可选）"
-                extra="填写后可使用邮箱验证码登录"
-                rules={emailFormRules(false)}
-              >
-                <Input prefix={<MailOutlined />} placeholder="请输入邮箱" size="large" />
-              </Form.Item>
-
-              <Row gutter={12}>
-                <Col span={12}>
-                  <Form.Item
-                    name="password"
-                    label="密码"
-                    rules={[
-                      { required: true, message: '请输入密码' },
-                      { min: 6, message: '密码至少 6 位' },
-                    ]}
-                  >
-                    <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    name="confirmPassword"
-                    label="确认密码"
-                    dependencies={['password']}
-                    rules={[
-                      { required: true, message: '请再次输入密码' },
-                      ({ getFieldValue }) => ({
-                        validator(_, value) {
-                          if (!value || getFieldValue('password') === value) {
-                            return Promise.resolve();
-                          }
-                          return Promise.reject(new Error('两次密码不一致'));
-                        },
-                      }),
-                    ]}
-                  >
-                    <Input.Password prefix={<LockOutlined />} placeholder="确认密码" size="large" />
-                  </Form.Item>
-                </Col>
-              </Row>
-            </Col>
-          </Row>
+          <Form.Item
+            name="confirmPassword"
+            label="确认密码"
+            dependencies={['password']}
+            rules={confirmPasswordRules('password')}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="请再次输入密码" size="large" />
+          </Form.Item>
 
           <Form.Item style={{ marginTop: 8, marginBottom: 12 }}>
             <Button type="primary" htmlType="submit" block size="large" loading={loading}>

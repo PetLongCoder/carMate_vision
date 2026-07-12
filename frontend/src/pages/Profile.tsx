@@ -46,9 +46,10 @@ import {
   updateProfile,
 } from '../api/auth';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
+import EmailInput from '../components/auth/EmailInput';
 import WechatActionModal from '../components/auth/WechatActionModal';
 import { useAuthStore } from '../store/authStore';
-import { emailFormRules } from '../utils/validation';
+import { emailFormRules, passwordFormRules, confirmPasswordRules, PASSWORD_HINT } from '../utils/validation';
 import { resolveLoginMethods } from '../utils/loginMethods';
 import type { User, VerifyMethod } from '../types';
 
@@ -462,7 +463,7 @@ const Profile: React.FC = () => {
           {emailModal === 'bind' && (
             <>
               <Form.Item name="email" label="新邮箱" rules={emailFormRules(true)}>
-                <Input prefix={<MailOutlined />} />
+                <EmailInput placeholder="请输入邮箱" />
               </Form.Item>
               <Form.Item name="code" label="验证码" rules={[{ required: true, len: 6 }]}>
                 <VerificationCodeInput
@@ -497,7 +498,7 @@ const Profile: React.FC = () => {
                 />
               </Form.Item>
               <Form.Item name="new_email" label="新邮箱" rules={emailFormRules(true)}>
-                <Input prefix={<MailOutlined />} />
+                <EmailInput placeholder="请输入新邮箱" />
               </Form.Item>
               <Form.Item name="new_code" label="新邮箱验证码" rules={[{ required: true, len: 6 }]}>
                 <VerificationCodeInput
@@ -563,10 +564,8 @@ const Profile: React.FC = () => {
           <Form.Item
             name="new_password"
             label="新密码"
-            rules={[
-              { required: true, message: '请输入新密码' },
-              { min: 6, message: '密码至少 6 位' },
-            ]}
+            extra={PASSWORD_HINT}
+            rules={passwordFormRules(true)}
           >
             <Input.Password prefix={<LockOutlined />} />
           </Form.Item>
@@ -574,17 +573,7 @@ const Profile: React.FC = () => {
             name="confirm_password"
             label="确认新密码"
             dependencies={['new_password']}
-            rules={[
-              { required: true, message: '请再次输入新密码' },
-              ({ getFieldValue }) => ({
-                validator(_, value) {
-                  if (!value || getFieldValue('new_password') === value) {
-                    return Promise.resolve();
-                  }
-                  return Promise.reject(new Error('两次输入的密码不一致'));
-                },
-              }),
-            ]}
+            rules={confirmPasswordRules('new_password', '新密码')}
           >
             <Input.Password prefix={<LockOutlined />} />
           </Form.Item>

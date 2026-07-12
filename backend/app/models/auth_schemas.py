@@ -2,6 +2,8 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field, field_validator
 
+from app.utils.password_validation import validate_password_strength
+
 SmsScene = Literal[
     "login",
     "register",
@@ -32,10 +34,15 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=50)
-    password: str = Field(min_length=6, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     phone: str = Field(pattern=r"^1[3-9]\d{9}$")
     code: str = Field(min_length=6, max_length=6)
     email: Optional[EmailStr] = None
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
     @field_validator("email", mode="before")
     @classmethod
@@ -113,7 +120,12 @@ class ChangePasswordRequest(BaseModel):
     verify_method: ChangePasswordVerifyMethod
     old_password: Optional[str] = None
     code: Optional[str] = Field(default=None, min_length=6, max_length=6)
-    new_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
 
 class UpdateProfileRequest(BaseModel):
