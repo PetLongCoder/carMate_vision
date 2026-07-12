@@ -164,11 +164,53 @@ export interface Alert {
   title: string;
   summary: string;
   source: string;
+  sourceLabel?: string;
+  anomalyType?: string;
+  anomalyTypeLabel?: string;
+  impactScope?: string;
+  suggestedActions?: string[];
+  notifiedChannels?: string[];
+  rawEvent?: Record<string, unknown>;
   createdAt: string;
   acknowledged: boolean;
+  acknowledgedBy?: string | null;
+  acknowledgedAt?: string | null;
 }
 
 export type AlertLevel = 'info' | 'warning' | 'critical';
+
+// ── 告警统计 ──
+
+export interface AlertStats {
+  total: number;
+  unacknowledged: number;
+  todayCount: number;
+  totalByLevel: Record<string, number>;
+  byAnomalyType: Record<string, number>;
+  dailyTrend: AlertDailyTrend[];
+  avgResponseMinutes: number;
+}
+
+export interface AlertDailyTrend {
+  date: string;
+  info: number;
+  warning: number;
+  critical: number;
+}
+
+export interface AlertAnalysis {
+  topAnomalyTypes: Array<{ type: string; label: string; count: number }>;
+  sourceDistribution: Array<{ source: string; label: string; count: number }>;
+  peakHours: Array<{ hour: number; count: number }>;
+  ackRate: number;
+  total: number;
+  acknowledged: number;
+}
+
+export interface AnomalyTypeOption {
+  value: string;
+  label: string;
+}
 
 // ============================================================
 // 历史记录

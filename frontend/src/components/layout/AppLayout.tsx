@@ -16,6 +16,9 @@ import {
   LogoutOutlined,
   ProfileOutlined,
   FileSearchOutlined,
+  DashboardOutlined,
+  FieldTimeOutlined,
+  PieChartOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { useAppStore } from '../../store';
@@ -35,6 +38,9 @@ const allMenuItems: Array<{
   { key: '/police-gesture', icon: <HighlightOutlined />, label: '交警手势', roles: ['user', 'admin'] },
   { key: '/driver-gesture', icon: <AimOutlined />, label: '车主手势', roles: ['user', 'admin'] },
   { key: '/alerts', icon: <AlertOutlined />, label: '告警中心', roles: ['admin'] },
+  { key: '/alerts/dashboard', icon: <DashboardOutlined />, label: '告警仪表盘', roles: ['user', 'admin'] },
+  { key: '/alerts/timeline', icon: <FieldTimeOutlined />, label: '告警时间线', roles: ['user', 'admin'] },
+  { key: '/alerts/analysis', icon: <PieChartOutlined />, label: '告警分析', roles: ['user', 'admin'] },
   { key: '/admin/operation-logs', icon: <AuditOutlined />, label: '用户操作日志', roles: ['admin'] },
   { key: '/admin/recognition-records', icon: <FileSearchOutlined />, label: '识别记录管理', roles: ['admin'] },
   { key: '/history', icon: <HistoryOutlined />, label: '历史记录', roles: ['user', 'admin'] },

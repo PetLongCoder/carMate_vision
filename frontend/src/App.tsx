@@ -10,6 +10,10 @@ import PlateRecognition from './pages/PlateRecognition';
 import PoliceGesture from './pages/PoliceGesture';
 import DriverGesture from './pages/DriverGesture';
 import AlertCenter from './pages/AlertCenter';
+import AlertDashboard from './pages/AlertDashboard';
+import AlertTimeline from './pages/AlertTimeline';
+import AlertDetail from './pages/AlertDetail';
+import AlertAnalysis from './pages/AlertAnalysis';
 import UserOperationLogs from './pages/UserOperationLogs';
 import AdminRecognitionRecords from './pages/AdminRecognitionRecords';
 import DashboardGestureStats from './pages/DashboardGestureStats';
@@ -49,6 +53,10 @@ const AuthenticatedApp: React.FC = () => {
           <Route path="/driver-gesture" element={<DriverGesture />} />
           <Route path="/history" element={<History />} />
           <Route path="/profile" element={<Profile />} />
+          <Route path="/alerts/dashboard" element={<AlertDashboard />} />
+          <Route path="/alerts/timeline" element={<AlertTimeline />} />
+          <Route path="/alerts/detail/:id" element={<AlertDetail />} />
+          <Route path="/alerts/analysis" element={<AlertAnalysis />} />
           <Route element={<RoleGuard allowedRoles={['admin']} />}>
             <Route path="/dashboard/gestures" element={<DashboardGestureStats />} />
             <Route path="/alerts" element={<AlertCenter />} />
