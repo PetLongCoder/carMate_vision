@@ -68,6 +68,7 @@ class TrackedPlate:
         self.color = detection["color"]
         self.vehicle_type = detection.get("vehicleType", "unknown")
         self.confidence = detection["confidence"]
+        self.best_confidence = detection["confidence"]
         self.bbox = detection["bbox"].copy()
 
         self.first_seen = timestamp
@@ -94,9 +95,12 @@ class TrackedPlate:
         self.confidence = round(self.confidence_sum / self.appearances, 4)
         self.bbox = detection["bbox"].copy()
 
-        # 若新检测置信度高于历史最佳, 更新车牌号 (防抖动)
-        if detection["confidence"] > self.confidence:
+        # 最佳单帧结果决定车牌文本；平均置信度只衡量整条轨迹稳定性。
+        if detection["confidence"] > self.best_confidence:
+            self.best_confidence = detection["confidence"]
             self.plate_no = detection["plateNo"]
+            self.color = detection["color"]
+            self.vehicle_type = detection.get("vehicleType", self.vehicle_type)
 
         self.history.append({
             "frame": frame_number,
@@ -282,11 +286,11 @@ class VideoStreamProcessor:
 
     参数:
         tracker:                PlateTracker 实例 (默认新建)
-        process_every_n_frames: 每 N 帧处理一次 (默认 3, 即跳过中间帧)
+        process_every_n_frames: 每 N 帧处理一次 (默认 1, 采样由上层统一控制)
     """
 
     def __init__(self, tracker: Optional[PlateTracker] = None,
-                 process_every_n_frames: int = 3):
+                 process_every_n_frames: int = 1):
         self.tracker = tracker or PlateTracker()
         self.process_every_n_frames = max(1, process_every_n_frames)
         self._frame_count = 0

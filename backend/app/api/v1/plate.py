@@ -170,7 +170,10 @@ async def track_video(
 
     # 创建会话
     session = await session_manager.create_session(
-        SessionType.VIDEO, tmp_path, total_frames
+        SessionType.VIDEO,
+        tmp_path,
+        total_frames,
+        delete_source_on_cleanup=True,
     )
 
     logger.info(

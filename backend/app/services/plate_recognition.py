@@ -78,7 +78,7 @@ class PlateRecognizer:
         except Exception as e:
             logger.warning(f"HyperLPR3 检测异常: {e}")
 
-        CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.5)
+        CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.6)
 
         seen = {}
         for code, confidence, type_idx, box in all_results:
