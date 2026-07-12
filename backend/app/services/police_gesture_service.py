@@ -216,6 +216,30 @@ def resize_keep_ratio(img_bgr: np.ndarray, target_size=(512, 512)) -> np.ndarray
     return canvas
 
 
+def unletterbox_keypoints(coord_norm: np.ndarray, original_shape, target_size=(512, 512)) -> np.ndarray:
+    """Map normalized keypoints from the padded inference canvas back to the original frame."""
+    arr = np.asarray(coord_norm, dtype=np.float32).copy()
+    if arr.ndim != 2 or arr.shape[0] != 2:
+        return arr
+
+    img_h, img_w = original_shape[:2]
+    target_w, target_h = target_size
+    if img_w <= 0 or img_h <= 0:
+        return arr
+
+    scale = min(target_w / img_w, target_h / img_h)
+    resized_w = max(1, int(round(img_w * scale)))
+    resized_h = max(1, int(round(img_h * scale)))
+    left = (target_w - resized_w) / 2.0
+    top = (target_h - resized_h) / 2.0
+
+    x = (arr[0] * target_w - left) / max(scale, 1e-6)
+    y = (arr[1] * target_h - top) / max(scale, 1e-6)
+    arr[0] = np.clip(x / img_w, 0.0, 1.0)
+    arr[1] = np.clip(y / img_h, 0.0, 1.0)
+    return arr
+
+
 # ═══════════════════════════════════════════════════════════════
 #  Frame inference
 # ═══════════════════════════════════════════════════════════════
@@ -264,7 +288,8 @@ def predict_video_frame(img_bgr: np.ndarray, state):
     os.chdir(str(_CTPGR_DIR))
     try:
         p_res = _shared_pose.get_coordinates(img_bgr)
-        coord_norm = p_res[_PG.COORD_NORM][np.newaxis]
+        coord_norm_2d = p_res[_PG.COORD_NORM]  # shape (2, 14) — for API serialization
+        coord_norm = coord_norm_2d[np.newaxis]
 
         ges_data = _shared_bla.handcrafted_features(coord_norm)
         features = np.concatenate(
@@ -285,14 +310,14 @@ def predict_video_frame(img_bgr: np.ndarray, state):
         np_out = class_out[0].cpu().numpy()
         scores_arr = np_out if np_out.ndim == 1 else np_out[0]
         gesture_id = int(np.argmax(scores_arr))
-        return gesture_id, scores_arr, (h.detach(), c.detach())
+        return gesture_id, scores_arr, (h.detach(), c.detach()), coord_norm_2d
     finally:
         os.chdir(old_cwd)
 
 
 def _coord_pose_quality(coord_norm: np.ndarray) -> dict:
     coords = np.asarray(coord_norm)
-    if coords.ndim != 2 or coords.shape[1] < 2:
+    if coords.ndim != 2:
         return {
             "score": 0.0,
             "valid": False,
@@ -302,7 +327,20 @@ def _coord_pose_quality(coord_norm: np.ndarray) -> dict:
             "bboxArea": 0.0,
         }
 
-    xy = coords[:, :2]
+    if coords.shape[0] == 2:
+        xy = coords.T
+    elif coords.shape[1] >= 2:
+        xy = coords[:, :2]
+    else:
+        return {
+            "score": 0.0,
+            "valid": False,
+            "validKeypoints": 0,
+            "validUpperKeypoints": 0,
+            "validArmKeypoints": 0,
+            "bboxArea": 0.0,
+        }
+
     valid_mask = (
         np.isfinite(xy[:, 0])
         & np.isfinite(xy[:, 1])
@@ -356,14 +394,14 @@ def predict_stream_frame_candidate(img_bgr: np.ndarray, state):
     os.chdir(str(_CTPGR_DIR))
     try:
         p_res = _shared_pose.get_coordinates(img_bgr)
-        coord_norm = p_res[_PG.COORD_NORM]
-        pose_quality = _coord_pose_quality(coord_norm)
+        coord_norm_2d = p_res[_PG.COORD_NORM]  # shape (2, 14) — for API serialization
+        pose_quality = _coord_pose_quality(coord_norm_2d)
         if not pose_quality["valid"]:
             scores_arr = np.zeros(len(GESTURE_NAMES_CN), dtype=np.float32)
             scores_arr[0] = 1.0
-            return 0, scores_arr, state, pose_quality, False
+            return 0, scores_arr, state, pose_quality, False, coord_norm_2d
 
-        coord_norm = coord_norm[np.newaxis]
+        coord_norm = coord_norm_2d[np.newaxis]
         ges_data = _shared_bla.handcrafted_features(coord_norm)
         features = np.concatenate(
             (
@@ -383,7 +421,7 @@ def predict_stream_frame_candidate(img_bgr: np.ndarray, state):
         np_out = class_out[0].cpu().numpy()
         scores_arr = np_out if np_out.ndim == 1 else np_out[0]
         gesture_id = int(np.argmax(scores_arr))
-        return gesture_id, scores_arr, (h.detach(), c.detach()), pose_quality, True
+        return gesture_id, scores_arr, (h.detach(), c.detach()), pose_quality, True, coord_norm_2d
     finally:
         os.chdir(old_cwd)
 
@@ -748,6 +786,24 @@ def transcode_browser_preview(input_path: str, output_path: str):
 
 
 # ═══════════════════════════════════════════════════════════════
+#  Keypoint serialization
+# ═══════════════════════════════════════════════════════════════
+
+def _keypoints_to_list(coord_norm) -> list:
+    """Convert (2, N) ndarray of normalized keypoints to a JSON-safe list of [x, y] pairs.
+
+    Returns an empty list when input is None or degenerate, so callers never
+    have to guard against None.
+    """
+    if coord_norm is None:
+        return []
+    arr = np.asarray(coord_norm)
+    if arr.ndim != 2 or arr.shape[0] != 2:
+        return []
+    return [[round(float(v), 4) for v in row] for row in arr.T]
+
+
+# ═══════════════════════════════════════════════════════════════
 #  SSE event formatting
 # ═══════════════════════════════════════════════════════════════
 
@@ -872,7 +928,8 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
 
             if frame_idx % sample_interval == 0:
                 re_frame = resize_keep_ratio(frame, (512, 512))
-                gesture_id, scores_arr, lstm_state = predict_video_frame(re_frame, lstm_state)
+                gesture_id, scores_arr, lstm_state, coord_norm = predict_video_frame(re_frame, lstm_state)
+                display_coord_norm = unletterbox_keypoints(coord_norm, frame.shape)
                 scores = _scores_to_probs(scores_arr)
                 confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
 
@@ -884,6 +941,7 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
                         "gesture": GESTURE_NAMES_CN[gesture_id] if gesture_id < len(GESTURE_NAMES_CN) else "未知",
                         "gestureId": gesture_id,
                         "confidence": round(confidence, 4),
+                        "keypoints": _keypoints_to_list(display_coord_norm),
                     }
                 )
                 processed += 1
@@ -1007,7 +1065,8 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
 
             if frame_idx % sample_interval == 0:
                 re_frame = resize_keep_ratio(frame, (512, 512))
-                gesture_id, scores_arr, lstm_state = predict_video_frame(re_frame, lstm_state)
+                gesture_id, scores_arr, lstm_state, coord_norm = predict_video_frame(re_frame, lstm_state)
+                display_coord_norm = unletterbox_keypoints(coord_norm, frame.shape)
                 scores = _scores_to_probs(scores_arr)
                 confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
                 frame_seconds = frame_idx / fps if fps > 0 else 0
@@ -1017,6 +1076,7 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
                     "gesture": GESTURE_NAMES_CN[gesture_id] if gesture_id < len(GESTURE_NAMES_CN) else "未知",
                     "gestureId": gesture_id,
                     "confidence": round(confidence, 4),
+                    "keypoints": _keypoints_to_list(display_coord_norm),
                 }
                 frame_results.append(frame_result)
                 processed += 1
@@ -1026,6 +1086,7 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
                         **_with_display_time(frame_result),
                         "frames_processed": processed,
                         "progress": round(min(99, (frame_idx + 1) / total_frames * 100), 1),
+                        "keypoints": _keypoints_to_list(display_coord_norm),
                     },
                 )
 
@@ -1146,7 +1207,7 @@ STREAM_SMOOTH_WINDOW = 5      # 平滑滑动窗口
 STREAM_WARMUP_FRAMES = 15     # LSTM 预热帧数
 STREAM_MIN_SEGMENT_FRAMES = 2  # 手势至少连续 N 帧才确认新段
 STREAM_POSE_MIN_QUALITY = _env_float("CARMATE_STREAM_POSE_MIN_QUALITY", 0.55)
-STREAM_MIN_CONFIDENCE = _env_float("CARMATE_STREAM_MIN_CONFIDENCE", 0.32)
+STREAM_MIN_CONFIDENCE = _env_float("CARMATE_STREAM_MIN_CONFIDENCE", 0.18)
 STREAM_SWITCH_MIN_FRAMES = max(1, _env_int("CARMATE_STREAM_SWITCH_MIN_FRAMES", 2))
 STREAM_KEEP_LAST_SECONDS = _env_float("CARMATE_STREAM_KEEP_LAST_SECONDS", 1.2)
 
@@ -1157,14 +1218,22 @@ def _stream_smooth_vote(history: list[dict]) -> tuple[int, float]:
         item
         for item in history[-STREAM_SMOOTH_WINDOW:]
         if item.get("validPose", True)
-        and (item["gestureId"] == 0 or item["confidence"] >= STREAM_MIN_CONFIDENCE)
     ]
     if not window:
         return 0, 0.0
 
+    gesture_window = [
+        item
+        for item in window
+        if item["gestureId"] > 0 and item["confidence"] >= STREAM_MIN_CONFIDENCE
+    ]
+    vote_window = gesture_window or [item for item in window if item["gestureId"] == 0]
+    if not vote_window:
+        return 0, 0.0
+
     votes: dict[int, int] = {}
     confs: dict[int, float] = {}
-    for item in window:
+    for item in vote_window:
         gid = item["gestureId"]
         votes[gid] = votes.get(gid, 0) + 1
         confs[gid] = confs.get(gid, 0.0) + item["confidence"]
@@ -1263,7 +1332,8 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
     if lstm_state is None:
         lstm_state = (_shared_lstm.h0(), _shared_lstm.c0())
 
-    lstm_gid, scores_arr, lstm_state, pose_quality, state_updated = predict_stream_frame_candidate(re_frame, lstm_state)
+    lstm_gid, scores_arr, lstm_state, pose_quality, state_updated, coord_norm = predict_stream_frame_candidate(re_frame, lstm_state)
+    display_coord_norm = unletterbox_keypoints(coord_norm, img_bgr.shape)
     if state_updated:
         _stream_states[stream_id] = lstm_state
 
@@ -1514,6 +1584,7 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
             "top5": top5_list,
             "inference_ms": round(elapsed * 1000, 1),
             "poseQuality": pose_quality,
+            "keypoints": _keypoints_to_list(display_coord_norm),
             "validPose": bool(state_updated),
             "history": recent_history,
             "segments": all_segments,               # 所有已确认手势段

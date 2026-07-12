@@ -54,9 +54,13 @@ const GESTURE_COLORS: Record<number, string> = {
 type FrameResult = {
   frame: number;
   time: number;
+  raw_time?: number;
+  rawTime?: number;
+  display_time?: number;
   gesture: string;
   gestureId: number;
   confidence: number;
+  keypoints?: number[][];   // 14 [x,y] pairs from pose estimation
 };
 
 type Segment = {
@@ -76,12 +80,22 @@ type SegmentSummary = {
 
 type StreamRecord = PoliceGestureResult & {
   inference_ms?: number;
+  proposedGesture?: string;
+  proposedGestureId?: number;
+  proposedConfidence?: number;
+  rawGesture?: string;
+  rawGestureId?: number;
+  rawConfidence?: number;
+  singleGesture?: string;
+  singleGestureId?: number;
+  singleConfidence?: number;
   validPose?: boolean;
   poseQuality?: {
     score?: number;
     validUpperKeypoints?: number;
     validArmKeypoints?: number;
   };
+  keypoints?: number[][];   // 14 [x,y] pairs from pose estimation
 };
 
 type PendingUpload = {
@@ -96,6 +110,31 @@ const STREAM_FRAME_MAX_WIDTH = 768;
 const STREAM_JPEG_QUALITY = 0.84;
 const LIVE_LABEL_HOLD_SECONDS = 1.0;
 
+// 14 keypoints (0-indexed AI Challenger):
+// 0=右肩, 1=右肘, 2=右腕, 3=左肩, 4=左肘, 5=左腕,
+// 6=右髋, 7=右膝, 8=右踝, 9=左髋, 10=左膝, 11=左踝,
+// 12=头顶, 13=颈部
+const POLICE_BONES: [number, number][] = [
+  [0, 1],   // 右大臂
+  [1, 2],   // 右小臂
+  [3, 4],   // 左大臂
+  [4, 5],   // 左小臂
+  [13, 0],  // 颈→右肩
+  [13, 3],  // 颈→左肩
+  [0, 6],   // 右侧躯干
+  [3, 9],   // 左侧躯干
+  [6, 7],   // 右大腿
+  [7, 8],   // 右小腿
+  [9, 10],  // 左大腿
+  [10, 11], // 左小腿
+  [12, 13], // 头→颈
+];
+
+const KEYPOINT_RADIUS = 5;
+const BONE_LINE_WIDTH = 2.5;
+const SKELETON_COLOR = '#00ff00';
+const SKELETON_LOW_CONF_COLOR = 'rgba(255, 255, 255, 0.3)';
+
 const getGestureLabel = (gestureId?: number, fallback?: string) => (
   gestureId === undefined ? '等待识别' : GESTURE_LABELS[gestureId] || fallback || '未知'
 );
@@ -105,6 +144,121 @@ const getGestureColor = (gestureId?: number) => (
 );
 
 const formatSeconds = (seconds: number) => `${seconds.toFixed(1)}s`;
+
+const getSkeletonFrameTime = (frame: FrameResult) => (
+  Number(frame.rawTime ?? frame.raw_time ?? frame.time) || 0
+);
+
+const normalizeFrameResult = (frame: FrameResult): FrameResult => {
+  const displayTime = Number(frame.time ?? frame.display_time ?? 0) || 0;
+  const rawTime = Number(frame.rawTime ?? frame.raw_time ?? displayTime) || 0;
+  return {
+    ...frame,
+    time: displayTime,
+    raw_time: rawTime,
+    rawTime,
+    display_time: Number(frame.display_time ?? displayTime) || displayTime,
+  };
+};
+
+// Cache last canvas dimensions to avoid expensive buffer reallocation
+const _canvasDims = new WeakMap<HTMLCanvasElement, { w: number; h: number }>();
+
+/**
+ * Draw police gesture skeleton (14 keypoints + 13 bones) on a canvas overlay.
+ * Normalized [0,1] coordinates are scaled to the container's display dimensions.
+ * When validPose is false the skeleton is rendered at reduced opacity.
+ *
+ * Only resizes the canvas backing store when the container actually changes size,
+ * which eliminates the frame-to-frame stutter caused by constant buffer reallocation.
+ */
+const drawSkeleton = (
+  canvas: HTMLCanvasElement | null,
+  containerEl: HTMLElement | null,
+  keypoints: number[][] | undefined,
+  isValid: boolean,
+  mediaEl?: HTMLVideoElement | null,
+) => {
+  if (!canvas || !containerEl) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const rect = containerEl.getBoundingClientRect();
+  if (rect.width < 1 || rect.height < 1) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const w = Math.round(rect.width * dpr);
+  const h = Math.round(rect.height * dpr);
+
+  // Only resize the canvas backing store when dimensions actually change.
+  // Setting canvas.width/height clears the buffer — we avoid this on every frame.
+  const prev = _canvasDims.get(canvas);
+  if (!prev || prev.w !== w || prev.h !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    _canvasDims.set(canvas, { w, h });
+  }
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  if (!keypoints || keypoints.length < 14) return;
+
+  let mediaLeft = 0;
+  let mediaTop = 0;
+  let mediaWidth = rect.width;
+  let mediaHeight = rect.height;
+  if (mediaEl?.videoWidth && mediaEl.videoHeight) {
+    const objectFit = window.getComputedStyle(mediaEl).objectFit;
+    const scaleX = rect.width / mediaEl.videoWidth;
+    const scaleY = rect.height / mediaEl.videoHeight;
+    if (objectFit === 'cover' || objectFit === 'contain' || objectFit === 'scale-down') {
+      const scale = objectFit === 'cover' ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+      mediaWidth = mediaEl.videoWidth * scale;
+      mediaHeight = mediaEl.videoHeight * scale;
+      mediaLeft = (rect.width - mediaWidth) / 2;
+      mediaTop = (rect.height - mediaHeight) / 2;
+    }
+  }
+
+  // Scale normalized [0,1] coords to the actual rendered video area.
+  const points = keypoints.map(([x, y]) => ({
+    x: mediaLeft + x * mediaWidth,
+    y: mediaTop + y * mediaHeight,
+  }));
+
+  const alpha = isValid ? 1.0 : 0.35;
+
+  // Draw bones
+  ctx.strokeStyle = isValid ? SKELETON_COLOR : SKELETON_LOW_CONF_COLOR;
+  ctx.lineWidth = BONE_LINE_WIDTH;
+  ctx.globalAlpha = alpha;
+  for (const [a, b] of POLICE_BONES) {
+    if (a >= points.length || b >= points.length) continue;
+    const pa = points[a];
+    const pb = points[b];
+    // Skip if either endpoint is at origin (0,0) — likely invalid / not detected
+    if ((pa.x < 0.01 && pa.y < 0.01) || (pb.x < 0.01 && pb.y < 0.01)) continue;
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.lineTo(pb.x, pb.y);
+    ctx.stroke();
+  }
+
+  // Draw keypoints
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    if (p.x < 0.01 && p.y < 0.01) continue;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, KEYPOINT_RADIUS, 0, 2 * Math.PI);
+    ctx.fillStyle = isValid ? SKELETON_COLOR : SKELETON_LOW_CONF_COLOR;
+    ctx.globalAlpha = alpha;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1.0;
+};
 
 const PoliceGesture: React.FC = () => {
   // ---- 从 Zustand store 读取/写入识别结果 (切换页面不丢失) ----
@@ -155,7 +309,9 @@ const PoliceGesture: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);       // 摄像头帧捕获（隐藏）
+  const skeletonCanvasRef = useRef<HTMLCanvasElement>(null);     // 视频模式骨骼叠加
+  const streamSkeletonCanvasRef = useRef<HTMLCanvasElement>(null); // 摄像头模式骨骼叠加
   const streamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number | undefined>(undefined);
   const uploadSeqRef = useRef(0);
@@ -212,6 +368,81 @@ const PoliceGesture: React.FC = () => {
     return latestPastFrame || futureFrame || frames[frames.length - 1];
   }, [frames, playbackTime]);
 
+  // Skeleton uses the nearest PAST frame only — never a future frame.
+  const SKELETON_HOLD_SECONDS = 0.8;
+
+  // requestVideoFrameCallback fires AFTER each video frame is presented to the
+  // compositor, ensuring the skeleton canvas is drawn in perfect sync with the
+  // video image. Falls back to timeupdate + rAF when rvfc is not available.
+  useEffect(() => {
+    if (!videoSrc) return;
+    const video = videoRef.current;
+    const canvas = skeletonCanvasRef.current;
+    if (!video || !canvas) return;
+    const containerEl = canvas.parentElement;
+
+    const frameApi = video as unknown as {
+      requestVideoFrameCallback?: (cb: (now: number, metadata: { presentationTime: number; mediaTime?: number }) => void) => number;
+      cancelVideoFrameCallback?: (id: number) => void;
+    };
+    const requestVideoFrameCallback = frameApi.requestVideoFrameCallback?.bind(video);
+    const cancelVideoFrameCallback = frameApi.cancelVideoFrameCallback?.bind(video);
+
+    let rvfcId = 0;
+    let rafId = 0;
+    let running = true;
+
+    const onFrame = (mediaTime?: number) => {
+      if (!running) return;
+      const pt = Math.max(0, mediaTime ?? video.currentTime);
+      const past = frames.filter((f) => getSkeletonFrameTime(f) <= pt && f.keypoints?.length);
+      const match = past[past.length - 1];
+      if (match && pt - getSkeletonFrameTime(match) <= SKELETON_HOLD_SECONDS) {
+        drawSkeleton(canvas, containerEl, match.keypoints, true, video);
+      } else {
+        drawSkeleton(canvas, containerEl, undefined, true, video);
+      }
+    };
+
+    if (requestVideoFrameCallback && cancelVideoFrameCallback) {
+      const loop = (_now: number, metadata: { mediaTime?: number }) => {
+        if (!running) return;
+        onFrame(metadata.mediaTime);
+        rvfcId = requestVideoFrameCallback(loop);
+      };
+      rvfcId = requestVideoFrameCallback(loop);
+    } else {
+      // Fallback: use rAF, which fires just before compositor presents —
+      // this is still closer to the actual video frame than timeupdate.
+      const loop = () => {
+        if (!running) return;
+        onFrame();
+        rafId = requestAnimationFrame(loop);
+      };
+      rafId = requestAnimationFrame(loop);
+    }
+
+    return () => {
+      running = false;
+      if (rvfcId && cancelVideoFrameCallback) cancelVideoFrameCallback(rvfcId);
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [videoSrc, frames]);
+
+  // Resize skeleton canvas when video container size changes
+  useEffect(() => {
+    const canvas = skeletonCanvasRef.current;
+    if (!canvas) return;
+    const containerEl = canvas.parentElement;
+    if (!containerEl) return;
+    const observer = new ResizeObserver(() => {
+      // Reset cached dims so drawSkeleton picks up the new size
+      _canvasDims.delete(canvas);
+    });
+    observer.observe(containerEl);
+    return () => observer.disconnect();
+  }, []);
+
   const overlayGestureId = currentSegment?.gestureId ?? currentFrame?.gestureId;
   const overlayLabel = overlayGestureId !== undefined
     ? getGestureLabel(overlayGestureId, currentSegment?.gesture || currentFrame?.gesture)
@@ -243,8 +474,18 @@ const PoliceGesture: React.FC = () => {
           }
 
           if (event === 'frame') {
-            const frame = data as FrameResult & { progress?: number };
-            setFrames((items) => [...items, frame]);
+            const frame = data as FrameResult & { progress?: number; keypoints?: number[][] };
+            setFrames((items) => [...items, normalizeFrameResult({
+              frame: frame.frame,
+              time: frame.time,
+              raw_time: frame.raw_time,
+              rawTime: frame.rawTime,
+              display_time: frame.display_time,
+              gesture: frame.gesture,
+              gestureId: frame.gestureId,
+              confidence: frame.confidence,
+              keypoints: frame.keypoints,
+            })]);
             setProgress(Math.max(1, Math.min(99, Number(frame.progress) || 1)));
             return;
           }
@@ -269,7 +510,7 @@ const PoliceGesture: React.FC = () => {
                 timestamp: doneData.timestamp,
               },
               top5: doneData.top5 || [],
-              frames: doneData.frames || [],
+              frames: (doneData.frames || []).map(normalizeFrameResult),
               segments: doneData.segments || [],
               duration: doneData.video_duration || videoRef.current?.duration || 0,
               fps: doneData.video_fps || 0,
@@ -393,6 +634,11 @@ const PoliceGesture: React.FC = () => {
     }
     setStreaming(false);
     setStreamBusy(false);
+    // Clear skeleton overlay
+    const ctx = streamSkeletonCanvasRef.current?.getContext('2d');
+    if (ctx && streamSkeletonCanvasRef.current) {
+      ctx.clearRect(0, 0, streamSkeletonCanvasRef.current.width, streamSkeletonCanvasRef.current.height);
+    }
     await resetPoliceGestureStream(STREAM_ID).catch(() => undefined);
   }, []);
 
@@ -424,9 +670,15 @@ const PoliceGesture: React.FC = () => {
 
       try {
         const response = await recognizePoliceGestureFrame(blob, STREAM_ID);
-        const data = ((response.data as any).data || response.data) as StreamRecord;
+        const data = ((response.data as any).data || response.data) as StreamRecord & { keypoints?: number[][] };
         storeSetStreamResult(data);
         storeAddStreamHistory(data);
+
+        // Draw skeleton overlay on webcam video
+        const containerEl = streamSkeletonCanvasRef.current?.parentElement;
+        if (containerEl) {
+          drawSkeleton(streamSkeletonCanvasRef.current, containerEl, data.keypoints, data.validPose ?? true, video);
+        }
       } catch (error) {
         console.error('stream frame failed:', error);
         message.warning('实时帧识别失败，请检查后端服务');
@@ -535,6 +787,17 @@ const PoliceGesture: React.FC = () => {
                 }}
                 onTimeUpdate={(event) => setPlaybackTime(event.currentTarget.currentTime)}
                 style={{ width: '100%', maxHeight: 430, display: 'block', background: '#000' }}
+              />
+              <canvas
+                ref={skeletonCanvasRef}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                  pointerEvents: 'none',
+                }}
               />
               <div
                 style={{
@@ -775,6 +1038,17 @@ const PoliceGesture: React.FC = () => {
               playsInline
               style={{ width: '100%', height: 360, objectFit: 'cover', display: 'block' }}
             />
+            <canvas
+              ref={streamSkeletonCanvasRef}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+              }}
+            />
             <div
               style={{
                 position: 'absolute',
@@ -818,6 +1092,18 @@ const PoliceGesture: React.FC = () => {
                     ? `${((streamResult.poseQuality.score || 0) * 100).toFixed(0)}%`
                     : '-'}
                   {streamResult.validPose === false ? '（未稳定捕获人体）' : ''}
+                </Descriptions.Item>
+                <Descriptions.Item label="Raw">
+                  {getGestureLabel(streamResult.rawGestureId, streamResult.rawGesture)}
+                  {streamResult.rawConfidence !== undefined ? ` ${(streamResult.rawConfidence * 100).toFixed(0)}%` : ''}
+                </Descriptions.Item>
+                <Descriptions.Item label="Proposed">
+                  {getGestureLabel(streamResult.proposedGestureId, streamResult.proposedGesture)}
+                  {streamResult.proposedConfidence !== undefined ? ` ${(streamResult.proposedConfidence * 100).toFixed(0)}%` : ''}
+                </Descriptions.Item>
+                <Descriptions.Item label="Single">
+                  {getGestureLabel(streamResult.singleGestureId, streamResult.singleGesture)}
+                  {streamResult.singleConfidence !== undefined ? ` ${(streamResult.singleConfidence * 100).toFixed(0)}%` : ''}
                 </Descriptions.Item>
                 <Descriptions.Item label="输入类型">连续摄像头帧</Descriptions.Item>
                 <Descriptions.Item label="时序状态">LSTM 状态保持</Descriptions.Item>
