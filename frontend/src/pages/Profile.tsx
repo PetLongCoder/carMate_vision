@@ -469,8 +469,8 @@ const Profile: React.FC = () => {
                   onSend={async () => {
                     const email = emailForm.getFieldValue('email');
                     await emailForm.validateFields(['email']);
-                    await sendEmailCode({ email, scene: 'bind' });
-                    message.success('验证码已发送（请在后端终端查看）');
+                    const tip = await sendEmailCode({ email, scene: 'bind' });
+                    message.success(tip);
                   }}
                 />
               </Form.Item>
@@ -480,8 +480,8 @@ const Profile: React.FC = () => {
             <Form.Item name="code" label="当前邮箱验证码" rules={[{ required: true, len: 6 }]}>
               <VerificationCodeInput
                 onSend={async () => {
-                  await sendSecureEmailCode('unbind');
-                  message.success('验证码已发送（请在后端终端查看）');
+                  const tip = await sendSecureEmailCode('unbind');
+                  message.success(tip);
                 }}
               />
             </Form.Item>
@@ -491,8 +491,8 @@ const Profile: React.FC = () => {
               <Form.Item name="old_code" label="原邮箱验证码" rules={[{ required: true, len: 6 }]}>
                 <VerificationCodeInput
                   onSend={async () => {
-                    await sendSecureEmailCode('rebind_old');
-                    message.success('原邮箱验证码已发送');
+                    const tip = await sendSecureEmailCode('rebind_old');
+                    message.success(tip);
                   }}
                 />
               </Form.Item>
@@ -504,8 +504,8 @@ const Profile: React.FC = () => {
                   onSend={async () => {
                     const new_email = emailForm.getFieldValue('new_email');
                     await emailForm.validateFields(['new_email']);
-                    await sendEmailCode({ email: new_email, scene: 'rebind_new' });
-                    message.success('新邮箱验证码已发送');
+                    const tip = await sendEmailCode({ email: new_email, scene: 'rebind_new' });
+                    message.success(tip);
                   }}
                 />
               </Form.Item>
@@ -549,10 +549,11 @@ const Profile: React.FC = () => {
                       const method = passwordForm.getFieldValue('verify_method');
                       if (method === 'phone') {
                         await sendSecureSmsCode('change_password');
+                        message.success('验证码已发送（请在后端终端查看）');
                       } else {
-                        await sendSecureEmailCode('change_password');
+                        const tip = await sendSecureEmailCode('change_password');
+                        message.success(tip);
                       }
-                      message.success('验证码已发送（请在后端终端查看）');
                     }}
                   />
                 </Form.Item>
@@ -620,10 +621,11 @@ const Profile: React.FC = () => {
                       const method = deleteForm.getFieldValue('verify_method');
                       if (method === 'phone') {
                         await sendSecureSmsCode('delete');
+                        message.success('验证码已发送（请在后端终端查看）');
                       } else {
-                        await sendSecureEmailCode('delete');
+                        const tip = await sendSecureEmailCode('delete');
+                        message.success(tip);
                       }
-                      message.success('验证码已发送（请在后端终端查看）');
                     }}
                   />
                 </Form.Item>

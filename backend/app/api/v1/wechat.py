@@ -74,6 +74,33 @@ def _make_qrcode_base64(content: str) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+_LAN_NETWORK_HINT = (
+    "已自动检测局域网 IP，无需手动改 .env。"
+    "后端请使用 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 启动；"
+    "手机与电脑需同一 WiFi/热点，校园网扫不开可改用手机热点。"
+)
+
+
+def _build_qrcode_payload(
+    state: str,
+    confirm_url: str,
+    *,
+    network_hint: str = "",
+    step: int | None = None,
+) -> dict:
+    payload = {
+        "state": state,
+        "confirm_url": confirm_url,
+        "qrcode_base64": _make_qrcode_base64(confirm_url),
+        "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
+        "lan_ip": detect_lan_ip(),
+        "network_hint": network_hint or _LAN_NETWORK_HINT,
+    }
+    if step is not None:
+        payload["step"] = step
+    return payload
+
+
 def _generate_unique_username(db: Session, openid: str) -> str:
     suffix = openid.replace("mock_", "")[:8]
     candidate = f"wx_{suffix}"
@@ -158,7 +185,6 @@ def create_wechat_bind_qrcode(user: User = Depends(require_current_user)):
         seconds=settings.WECHAT_SESSION_TTL_SECONDS
     )
     confirm_url = f"{settings.wechat_confirm_base_url}/api/auth/wechat/confirm?state={state}"
-    lan_ip = detect_lan_ip()
 
     _pending_sessions[state] = WechatPendingSession(
         state=state,
@@ -168,14 +194,11 @@ def create_wechat_bind_qrcode(user: User = Depends(require_current_user)):
     )
 
     return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": lan_ip,
-            "network_hint": "扫码确认后，将把微信绑定到当前登录账号。",
-        }
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="扫码确认后，将把微信绑定到当前登录账号。",
+        )
     )
 
 
@@ -217,14 +240,11 @@ def create_wechat_unbind_qrcode(user: User = Depends(require_current_user)):
         bind_user_id=user.id,
     )
     return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": detect_lan_ip(),
-            "network_hint": "请使用已绑定的微信扫码确认解绑。",
-        }
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="请使用已绑定的微信扫码确认解绑。",
+        )
     )
 
 
@@ -261,15 +281,12 @@ def create_wechat_rebind_qrcode(user: User = Depends(require_current_user)):
         rebind_step=1,
     )
     return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": detect_lan_ip(),
-            "network_hint": "第一步：请使用当前绑定的微信扫码确认。",
-            "step": 1,
-        }
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="第一步：请使用当前绑定的微信扫码确认。",
+            step=1,
+        )
     )
 
 
@@ -302,24 +319,10 @@ def create_wechat_qrcode():
         seconds=settings.WECHAT_SESSION_TTL_SECONDS
     )
     confirm_url = f"{settings.wechat_confirm_base_url}/api/auth/wechat/confirm?state={state}"
-    lan_ip = detect_lan_ip()
 
     _pending_sessions[state] = WechatPendingSession(state=state, expires_at=expires_at)
 
-    return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": lan_ip,
-            "network_hint": (
-                "已自动检测局域网 IP，无需手动改 .env。"
-                "后端请使用 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 启动；"
-                "手机与电脑需同一网络，校园网扫不开可改用手机热点。"
-            ),
-        }
-    )
+    return ok(_build_qrcode_payload(state, confirm_url))
 
 
 @router.get("/poll")

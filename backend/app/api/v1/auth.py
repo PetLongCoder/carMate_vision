@@ -35,6 +35,8 @@ from app.models.auth_schemas import (
 )
 from app.models.db_models import User, VerificationCode
 from app.services.operation_log_service import log_operation
+from app.services.email_service import EmailSendError, send_verification_email
+from app.services.sms_service import send_verification_sms
 from app.services.alert_agent.event_collector import event_collector
 from app.services.alert_agent import AnomalyEvent, AlertLevel
 from app.services.user_privacy_service import (
@@ -87,6 +89,24 @@ def build_auth_response(user: User) -> AuthResponse:
 
 def generate_code() -> str:
     return f"{random.randint(100000, 999999)}"
+
+
+def dispatch_sms_code(db: Session, phone: str, scene: str) -> None:
+    """生成、入库并在终端输出短信验证码（mock）。"""
+    code = generate_code()
+    save_code(db, f"phone:{phone}", scene, code)
+    send_verification_sms(phone, code, scene)
+
+
+def dispatch_email_code(db: Session, email: str, scene: str) -> tuple[str | None, dict | None]:
+    """生成、入库并发送邮箱验证码。成功返回 (message, None)，失败返回 (None, fail_response)。"""
+    code = generate_code()
+    save_code(db, f"email:{email}", scene, code)
+    try:
+        message = send_verification_email(email, code, scene)
+    except EmailSendError as exc:
+        return None, fail(str(exc))
+    return message, None
 
 
 def save_code(db: Session, target: str, scene: str, code: str) -> None:
@@ -176,14 +196,12 @@ def seed_default_users(db: Session) -> None:
             "username": "admin",
             "password": "123456",
             "phone": "13900139000",
-            "email": "admin@example.com",
             "role": "admin",
         },
         {
             "username": "user",
             "password": "123456",
             "phone": "13800138000",
-            "email": "user@example.com",
             "role": "user",
         },
     ]
@@ -197,7 +215,6 @@ def seed_default_users(db: Session) -> None:
             role=item["role"],
         )
         assign_phone(user, item["phone"])
-        assign_email(user, item["email"])
         db.add(user)
     db.commit()
 
@@ -218,9 +235,7 @@ def send_sms_code(body: SendSmsCodeRequest, db: Session = Depends(get_db)):
     if body.scene == "rebind_new" and user:
         return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    code = generate_code()
-    save_code(db, f"phone:{body.phone}", body.scene, code)
-    logger.info(f"[SMS Code] {body.phone} scene={body.scene} code={code}")
+    dispatch_sms_code(db, body.phone, body.scene)
     return ok(message="验证码已发送")
 
 
@@ -248,10 +263,10 @@ def send_email_code(body: SendEmailCodeRequest, db: Session = Depends(get_db)):
     if body.scene == "rebind_new" and user:
         return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    code = generate_code()
-    save_code(db, f"email:{body.email}", body.scene, code)
-    logger.info(f"[Email Code] {body.email} scene={body.scene} code={code}")
-    return ok(message="验证码已发送")
+    message, error = dispatch_email_code(db, body.email, body.scene)
+    if error:
+        return error
+    return ok(message=message or "验证码已发送")
 
 
 @router.post("/register")
@@ -500,9 +515,7 @@ def send_secure_sms_code(
         if guard:
             return fail(guard)
 
-    code = generate_code()
-    save_code(db, f"phone:{phone}", body.scene, code)
-    logger.info(f"[SMS Code] {phone} scene={body.scene} code={code}")
+    dispatch_sms_code(db, phone, body.scene)
     return ok(message="验证码已发送")
 
 
@@ -521,10 +534,10 @@ def send_secure_email_code(
         if guard:
             return fail(guard)
 
-    code = generate_code()
-    save_code(db, f"email:{email}", body.scene, code)
-    logger.info(f"[Email Code] {email} scene={body.scene} code={code}")
-    return ok(message="验证码已发送")
+    message, error = dispatch_email_code(db, email, body.scene)
+    if error:
+        return error
+    return ok(message=message or "验证码已发送")
 
 
 @router.post("/unbind/phone")

@@ -8,11 +8,52 @@ echo   CarMate 全服务一键启动
 echo ============================================================
 echo.
 
-:: ── 1. 检查依赖 ──
+:: ── 0. 首次运行：自动 .env + 依赖 ──
+echo [初始化] -------------------------------------------------
+if not exist "backend\.env" (
+    if exist "backend\.env.example" (
+        copy /y "backend\.env.example" "backend\.env" >nul
+        echo [✓] 已从 backend\.env.example 创建 backend\.env
+    )
+) else (
+    echo [✓] backend\.env 已存在
+)
+
+if not exist "frontend\.env" (
+    if exist "frontend\.env.example" (
+        copy /y "frontend\.env.example" "frontend\.env" >nul
+        echo [✓] 已从 frontend\.env.example 创建 frontend\.env
+    )
+) else (
+    echo [✓] frontend\.env 已存在
+)
+
+python -c "import fastapi" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [..] 正在安装 Python 依赖...
+    pip install -r backend\requirements.txt -q
+    if %errorlevel% neq 0 ( echo [✗] pip install 失败 & pause & exit /b 1 )
+    echo [✓] Python 依赖已安装
+) else (
+    echo [✓] Python 依赖就绪
+)
+
+if not exist "frontend\node_modules" (
+    echo [..] 正在安装前端依赖...
+    pushd frontend
+    call npm install
+    if %errorlevel% neq 0 ( popd & echo [✗] npm install 失败 & pause & exit /b 1 )
+    popd
+    echo [✓] 前端依赖已安装
+) else (
+    echo [✓] 前端依赖就绪
+)
+
+:: ── 1. 检查环境 ──
+echo.
 echo [检查环境] -----------------------------------------------
 if exist mediamtx\mediamtx.exe ( echo [✓] MediaMTX ) else (
-    echo [✗] mediamtx\mediamtx.exe 未找到! 请从 https://github.com/bluenviron/mediamtx/releases 下载
-    pause & exit /b 1
+    echo [!] mediamtx\mediamtx.exe 未找到，跳过流媒体服务（登录/识别仍可本地调试）
 )
 
 where ffmpeg >nul 2>&1
@@ -49,11 +90,15 @@ timeout /t 2 /nobreak >nul
 echo.
 echo [启动服务] ------------------------------------------------
 
-:: 3a. MediaMTX
-echo   正在启动 MediaMTX...
-start "MediaMTX" /min mediamtx\mediamtx.exe mediamtx\mediamtx.yml
-timeout /t 2 /nobreak >nul
-echo   [✓] MediaMTX    → rtsp://localhost:8554 ^| HLS :8888 ^| WebRTC :8889
+:: 3a. MediaMTX（可选）
+if exist mediamtx\mediamtx.exe (
+    echo   正在启动 MediaMTX...
+    start "MediaMTX" /min mediamtx\mediamtx.exe mediamtx\mediamtx.yml
+    timeout /t 2 /nobreak >nul
+    echo   [✓] MediaMTX    → rtsp://localhost:8554 ^| HLS :8888 ^| WebRTC :8889
+) else (
+    echo   [=] 跳过 MediaMTX
+)
 
 :: 3b. 后端
 echo   正在启动 FastAPI 后端...
@@ -63,7 +108,7 @@ echo   [✓] 后端 API    → http://localhost:8000 ^| 文档 http://localhost:
 
 :: 3c. 前端
 echo   正在启动前端...
-start "CarMate-Frontend" /min cmd /c "cd /d frontend && npx vite --host 0.0.0.0 --port 5173"
+start "CarMate-Frontend" /min cmd /c "cd /d frontend && npm run dev -- --host 0.0.0.0 --port 5173"
 timeout /t 3 /nobreak >nul
 echo   [✓] 前端        → http://localhost:5173
 
@@ -75,11 +120,13 @@ echo.
 echo   ┌─ 前端       http://localhost:5173
 echo   ├─ 后端 API   http://localhost:8000
 echo   ├─ API 文档   http://localhost:8000/docs
-echo   ├─ HLS 播放   http://localhost:8888
-echo   └─ WebRTC     http://localhost:8889
-echo.
-echo   沙盘摄像头: rtsp://10.126.59.120:8554/live/live1 ~ 12
-echo   测试推流:   ffmpeg -re -stream_loop -1 -i test_video.mp4 -c copy -f rtsp rtsp://localhost:8554/camera
+echo   ├─ 邮箱验证码  真实 SMTP（backend\.env 已含全队配置）
+echo   ├─ 短信验证码  后端终端 [SMS Code]（mock）
+echo   └─ 测试账号   admin/123456  user/123456
+if exist mediamtx\mediamtx.exe (
+    echo   ├─ HLS 播放   http://localhost:8888
+    echo   └─ WebRTC     http://localhost:8889
+)
 echo ============================================================
 echo.
 pause
