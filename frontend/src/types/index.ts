@@ -135,6 +135,22 @@ export interface PoliceGestureResult {
   gestureId: number;
   confidence: number;
   timestamp: number;
+  policeOnly?: boolean;
+  policeDetected?: boolean;
+  policeCandidateDetected?: boolean;
+  policeConfirmed?: boolean;
+  policeConfirmStreak?: number;
+  policeRequiredConfirmFrames?: number;
+  policeConfidence?: number;
+  policeClass?: string;
+  policeBox?: number[];
+  policeBoxNorm?: number[];
+  policeCandidateConfidence?: number;
+  policeCandidateClass?: string;
+  policeNegativeConfidence?: number;
+  policeNegativeClass?: string;
+  policeRejectReason?: string | null;
+  policeDetectionError?: string | null;
 }
 
 // ============================================================

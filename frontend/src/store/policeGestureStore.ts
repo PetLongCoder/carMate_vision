@@ -11,6 +11,21 @@ type FrameResult = {
   gestureId: number;
   confidence: number;
   keypoints?: number[][];   // 14 [x,y] pairs from pose estimation
+  policeOnly?: boolean;
+  policeDetected?: boolean;
+  policeCandidateDetected?: boolean;
+  policeConfirmed?: boolean;
+  policeConfirmStreak?: number;
+  policeRequiredConfirmFrames?: number;
+  policeConfidence?: number;
+  policeClass?: string;
+  policeBox?: number[];
+  policeBoxNorm?: number[];
+  policeCandidateConfidence?: number;
+  policeCandidateClass?: string;
+  policeNegativeConfidence?: number;
+  policeNegativeClass?: string;
+  policeRejectReason?: string | null;
 };
 
 type Segment = {
@@ -31,6 +46,21 @@ type StreamRecord = PoliceGestureResult & {
   singleGesture?: string;
   singleGestureId?: number;
   singleConfidence?: number;
+  policeOnly?: boolean;
+  policeDetected?: boolean;
+  policeCandidateDetected?: boolean;
+  policeConfirmed?: boolean;
+  policeConfirmStreak?: number;
+  policeRequiredConfirmFrames?: number;
+  policeConfidence?: number;
+  policeClass?: string;
+  policeBox?: number[];
+  policeBoxNorm?: number[];
+  policeCandidateConfidence?: number;
+  policeCandidateClass?: string;
+  policeNegativeConfidence?: number;
+  policeNegativeClass?: string;
+  policeRejectReason?: string | null;
   validPose?: boolean;
   poseQuality?: {
     score?: number;

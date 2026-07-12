@@ -67,9 +67,10 @@ export function getTrackingSession(sessionId: string) {
 //  交警手势识别
 // ═══════════════════════════════════════════════════════════
 
-export function uploadPoliceGestureVideo(file: File) {
+export function uploadPoliceGestureVideo(file: File, policeOnly = false) {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('police_only', String(policeOnly));
   return request.post<ApiResponse<PoliceGestureResult>>('/police-gesture/recognize', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 600000,
@@ -90,9 +91,11 @@ export async function streamPoliceGestureVideo(
   file: File,
   onEvent: (event: PoliceGestureStreamEvent) => void,
   signal?: AbortSignal,
+  policeOnly = false,
 ) {
   const formData = new FormData();
   formData.append('file', file);
+  formData.append('police_only', String(policeOnly));
 
   const baseURL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api';
   const response = await fetch(`${baseURL}/police-gesture/recognize/stream`, {
@@ -161,10 +164,11 @@ export function resetPoliceGestureStream(streamId = 'default') {
   });
 }
 
-export function recognizePoliceGestureFrame(file: Blob, streamId = 'default') {
+export function recognizePoliceGestureFrame(file: Blob, streamId = 'default', policeOnly = false) {
   const formData = new FormData();
   formData.append('file', file, 'frame.jpg');
   formData.append('stream_id', streamId);
+  formData.append('police_only', String(policeOnly));
   return request.post<ApiResponse<PoliceGestureResult>>('/police-gesture/stream/frame', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 120000,

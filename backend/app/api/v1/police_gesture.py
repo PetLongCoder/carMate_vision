@@ -75,6 +75,7 @@ async def health_check():
 @router.post("/police-gesture/recognize")
 async def recognize_police_gesture(
     file: UploadFile = File(...),
+    police_only: bool | None = Form(None),
     request: Request = None,
     user: User | None = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -87,7 +88,7 @@ async def recognize_police_gesture(
     is_video = file_ext in VIDEO_EXTENSIONS
     try:
         if is_video:
-            response = process_police_gesture_video(contents, file_ext, timestamp, filename=file.filename)
+            response = process_police_gesture_video(contents, file_ext, timestamp, filename=file.filename, police_only=police_only)
         else:
             response = process_police_gesture_image(contents, timestamp)
         data = response.get("data", {}) if isinstance(response, dict) else {}
@@ -149,7 +150,10 @@ async def recognize_police_gesture(
 
 
 @router.post("/police-gesture/recognize/stream")
-async def recognize_police_gesture_stream_video(file: UploadFile = File(...)):
+async def recognize_police_gesture_stream_video(
+    file: UploadFile = File(...),
+    police_only: bool | None = Form(None),
+):
     """上传视频边分析边返回结果（SSE）。"""
     ensure_police_gesture_model_loaded()
     contents = await file.read()
@@ -157,7 +161,7 @@ async def recognize_police_gesture_stream_video(file: UploadFile = File(...)):
     if file_ext not in VIDEO_EXTENSIONS:
         raise HTTPException(400, "流式识别仅支持视频文件")
     return StreamingResponse(
-        generate_police_gesture_video_stream(contents, file_ext, filename=file.filename),
+        generate_police_gesture_video_stream(contents, file_ext, filename=file.filename, police_only=police_only),
         media_type="text/event-stream",
     )
 
@@ -172,6 +176,7 @@ async def reset_police_gesture_stream(stream_id: str = Form("default")):
 async def recognize_police_gesture_stream_frame(
     file: UploadFile = File(...),
     stream_id: str = Form("default"),
+    police_only: bool | None = Form(None),
     request: Request = None,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user),
@@ -181,7 +186,7 @@ async def recognize_police_gesture_stream_frame(
     contents = await file.read()
     client_info = _extract_client_info(request)
     try:
-        result = process_stream_frame(contents, stream_id)
+        result = process_stream_frame(contents, stream_id, police_only=police_only)
         data = result.get("data", {}) if isinstance(result, dict) else {}
         # 新段确认时写 RecognitionRecord (含用户信息)
         if data.get("segmentChanged"):

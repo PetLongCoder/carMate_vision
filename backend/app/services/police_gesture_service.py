@@ -25,6 +25,7 @@ from PIL import Image
 
 from app.utils.logger import logger
 from app.services.record_service import build_gesture_summary
+from app.services.police_officer_detector import PoliceOfficerDetection, detect_police_officer
 from app.services.police_gesture_logger import (
     GESTURE_LOG_LEVEL,
     GestureLogEntry,
@@ -97,6 +98,12 @@ LABEL_TIME_OFFSET_SECONDS = max(0.0, _env_float("CARMATE_LABEL_TIME_OFFSET_SECON
 PREVIEW_MAX_WIDTH = max(240, _env_int("CARMATE_PREVIEW_MAX_WIDTH", 1280))
 PREVIEW_CRF = min(35, max(18, _env_int("CARMATE_PREVIEW_CRF", 23)))
 PREVIEW_TRANSCODE_TIMEOUT_SECONDS = max(30, _env_int("CARMATE_PREVIEW_TRANSCODE_TIMEOUT_SECONDS", 300))
+POLICE_RECOGNITION_MODE = os.getenv("CARMATE_POLICE_RECOGNITION_MODE", "all").lower()
+POLICE_ONLY_DETECT_INTERVAL = max(1, _env_int("CARMATE_POLICE_ONLY_DETECT_INTERVAL", 3))
+POLICE_ONLY_CONFIRM_FRAMES = max(1, _env_int("CARMATE_POLICE_ONLY_CONFIRM_FRAMES", 3))
+POLICE_ONLY_LOSE_DETECTIONS = max(1, _env_int("CARMATE_POLICE_ONLY_LOSE_DETECTIONS", 2))
+POLICE_ONLY_HOLD_FRAMES = max(1, _env_int("CARMATE_POLICE_ONLY_HOLD_FRAMES", 8))
+POLICE_ONLY_TRACK_PAD_RATIO = max(0.05, _env_float("CARMATE_POLICE_ONLY_TRACK_PAD_RATIO", 0.30))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -373,7 +380,7 @@ def _coord_pose_quality(coord_norm: np.ndarray) -> dict:
 
     return {
         "score": round(float(score), 4),
-        "valid": bool(score >= STREAM_POSE_MIN_QUALITY and valid_upper >= 4 and valid_arm >= 3),
+        "valid": bool(score >= STREAM_POSE_MIN_QUALITY and valid_upper >= 3 and valid_arm >= 2),
         "validKeypoints": int(valid_mask.sum()),
         "validUpperKeypoints": valid_upper,
         "validArmKeypoints": valid_arm,
@@ -381,7 +388,11 @@ def _coord_pose_quality(coord_norm: np.ndarray) -> dict:
     }
 
 
-def predict_stream_frame_candidate(img_bgr: np.ndarray, state):
+def predict_stream_frame_candidate(
+    img_bgr: np.ndarray,
+    state,
+    fallback_coord_norm_2d: np.ndarray | None = None,
+):
     """Realtime stream inference with pose-quality gating.
 
     Bad pose frames are not fed into the LSTM, which prevents one blurry or
@@ -396,6 +407,15 @@ def predict_stream_frame_candidate(img_bgr: np.ndarray, state):
         p_res = _shared_pose.get_coordinates(img_bgr)
         coord_norm_2d = p_res[_PG.COORD_NORM]  # shape (2, 14) — for API serialization
         pose_quality = _coord_pose_quality(coord_norm_2d)
+        if not pose_quality["valid"] and fallback_coord_norm_2d is not None:
+            fallback_quality = _coord_pose_quality(fallback_coord_norm_2d)
+            if fallback_quality["valid"]:
+                coord_norm_2d = fallback_coord_norm_2d
+                pose_quality = {
+                    **fallback_quality,
+                    "imputed": True,
+                    "source": "last_valid_pose",
+                }
         if not pose_quality["valid"]:
             scores_arr = np.zeros(len(GESTURE_NAMES_CN), dtype=np.float32)
             scores_arr[0] = 1.0
@@ -439,6 +459,14 @@ _stream_stable_results: dict[str, dict] = {}   # 当前稳定输出
 _stream_candidates: dict[str, dict] = {}       # 等待确认的候选输出
 _stream_stats: dict[str, dict] = {}            # 推理耗时统计 (用于周期性日志输出)
 _stream_pose_skip_counters: dict[str, int] = {}  # 姿势质量不足跳过计数 (用于节流日志)
+_stream_police_detections: dict[str, dict] = {}  # YOLO-World gate cache for police-only mode
+_stream_last_valid_pose: dict[str, dict] = {}     # 最近一次有效姿态，用于短时补帧
+
+
+def is_police_only_mode(police_only: Optional[bool] = None) -> bool:
+    if police_only is not None:
+        return bool(police_only)
+    return POLICE_RECOGNITION_MODE in {"police_only", "traffic_police_only", "police"}
 
 
 def reset_stream_state(stream_id: str = "default") -> None:
@@ -452,6 +480,267 @@ def reset_stream_state(stream_id: str = "default") -> None:
     _stream_candidates.pop(stream_id, None)
     _stream_stats.pop(stream_id, None)
     _stream_pose_skip_counters.pop(stream_id, None)
+    _stream_police_detections.pop(stream_id, None)
+    _stream_last_valid_pose.pop(stream_id, None)
+
+
+def _police_detection_payload(
+    detection: PoliceOfficerDetection | None,
+    police_only: bool,
+    image_shape=None,
+    *,
+    confirmed: bool = False,
+    streak: int = 0,
+    required_frames: int = POLICE_ONLY_CONFIRM_FRAMES,
+) -> dict:
+    payload = {
+        "policeOnly": bool(police_only),
+        "policeConfirmed": bool(confirmed),
+        "policeConfirmStreak": int(streak),
+        "policeRequiredConfirmFrames": int(required_frames),
+    }
+    if detection is not None:
+        payload.update(detection.to_dict())
+        payload["policeCandidateDetected"] = bool(detection.detected)
+        payload["policeDetected"] = bool(confirmed)
+        if detection.box and image_shape is not None:
+            img_h, img_w = image_shape[:2]
+            if img_w > 0 and img_h > 0:
+                x1, y1, x2, y2 = detection.box
+                payload["policeBoxNorm"] = [
+                    round(max(0.0, min(1.0, float(x1) / img_w)), 4),
+                    round(max(0.0, min(1.0, float(y1) / img_h)), 4),
+                    round(max(0.0, min(1.0, float(x2) / img_w)), 4),
+                    round(max(0.0, min(1.0, float(y2) / img_h)), 4),
+                ]
+    return payload
+
+
+def _create_tracker_with_fallback(img_bgr: np.ndarray, box_xyxy: list[float]):
+    factories = []
+    legacy = getattr(cv2, "legacy", None)
+    if legacy is not None:
+        for name in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMOSSE_create"):
+            factory = getattr(legacy, name, None)
+            if callable(factory):
+                factories.append(factory)
+    for name in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMOSSE_create"):
+        factory = getattr(cv2, name, None)
+        if callable(factory):
+            factories.append(factory)
+
+    x1, y1, x2, y2 = [float(v) for v in box_xyxy]
+    w = max(1.0, x2 - x1)
+    h = max(1.0, y2 - y1)
+    for factory in factories:
+        try:
+            tracker = factory()
+            ok = tracker.init(img_bgr, (x1, y1, w, h))
+            if ok is False:
+                continue
+            return tracker
+        except Exception:
+            continue
+    return None
+
+
+def _update_tracker_box(tracker, img_bgr: np.ndarray) -> list[float] | None:
+    if tracker is None:
+        return None
+    try:
+        ok, bbox = tracker.update(img_bgr)
+    except Exception:
+        return None
+    if not ok or bbox is None:
+        return None
+    x, y, w, h = [float(v) for v in bbox]
+    if w <= 1.0 or h <= 1.0:
+        return None
+    return [x, y, x + w, y + h]
+
+
+def _expand_box_to_crop(
+    img_bgr: np.ndarray,
+    box_xyxy: list[float],
+    image_shape,
+    pad_ratio: float = POLICE_ONLY_TRACK_PAD_RATIO,
+) -> tuple[np.ndarray, tuple[int, int, int, int]] | tuple[None, None]:
+    if not box_xyxy or image_shape is None:
+        return None, None
+    img_h, img_w = image_shape[:2]
+    if img_w <= 0 or img_h <= 0:
+        return None, None
+    x1, y1, x2, y2 = [float(v) for v in box_xyxy]
+    bw = max(1.0, x2 - x1)
+    bh = max(1.0, y2 - y1)
+    pad_x = bw * pad_ratio
+    pad_y = bh * pad_ratio
+    left = max(0, int(np.floor(x1 - pad_x)))
+    top = max(0, int(np.floor(y1 - pad_y)))
+    right = min(img_w, int(np.ceil(x2 + pad_x)))
+    bottom = min(img_h, int(np.ceil(y2 + pad_y)))
+    if right - left < 2 or bottom - top < 2:
+        return None, None
+    crop = img_bgr[top:bottom, left:right]
+    if crop is None or crop.size == 0:
+        return None, None
+    return crop, (left, top, right, bottom)
+
+
+def _remap_keypoints_from_crop(coord_norm: np.ndarray, crop_box: tuple[int, int, int, int] | None, image_shape) -> np.ndarray:
+    if crop_box is None:
+        return coord_norm
+    arr = np.asarray(coord_norm, dtype=np.float32).copy()
+    if arr.ndim != 2 or arr.shape[0] != 2 or image_shape is None:
+        return arr
+    img_h, img_w = image_shape[:2]
+    if img_w <= 0 or img_h <= 0:
+        return arr
+    left, top, right, bottom = crop_box
+    crop_w = max(1.0, float(right - left))
+    crop_h = max(1.0, float(bottom - top))
+    abs_x = left + arr[0] * crop_w
+    abs_y = top + arr[1] * crop_h
+    arr[0] = np.clip(abs_x / img_w, 0.0, 1.0)
+    arr[1] = np.clip(abs_y / img_h, 0.0, 1.0)
+    return arr
+
+
+def _default_police_detection_state(frame_count: int = 0) -> dict:
+    return {
+        "frame": frame_count,
+        "raw_detection": None,
+        "display_detection": None,
+        "confirmed_detection": None,
+        "streak": 0,
+        "miss_streak": 0,
+        "confirmed_until_frame": 0,
+        "confirmed": False,
+        "tracked_box": None,
+        "tracker": None,
+        "tracker_miss_streak": 0,
+    }
+
+
+def _refresh_police_detection_state(
+    state: dict | None,
+    img_bgr: np.ndarray,
+    frame_count: int,
+    police_only: bool,
+) -> dict | None:
+    if not police_only:
+        return None
+
+    cached = dict(state) if state else _default_police_detection_state(frame_count)
+    should_detect = cached["raw_detection"] is None or frame_count % POLICE_ONLY_DETECT_INTERVAL == 1
+    confirmed = bool(cached.get("confirmed", False))
+    streak = int(cached.get("streak", 0))
+    miss_streak = int(cached.get("miss_streak", 0))
+    confirmed_detection = cached.get("confirmed_detection")
+    confirmed_until_frame = int(cached.get("confirmed_until_frame", 0))
+    tracker = cached.get("tracker")
+    tracked_box = cached.get("tracked_box")
+    tracker_miss_streak = int(cached.get("tracker_miss_streak", 0))
+    raw_detection = cached.get("raw_detection")
+    display_detection = None
+
+    detection = detect_police_officer(img_bgr) if should_detect else None
+    if detection is not None:
+        raw_detection = detection
+
+    if detection is not None and detection.detected:
+        previous_raw_detected = bool(cached.get("raw_detection") and cached["raw_detection"].detected)
+        streak = streak + 1 if previous_raw_detected else 1
+        miss_streak = 0
+        tracked_box = detection.box or tracked_box
+        if detection.box is not None:
+            tracker = _create_tracker_with_fallback(img_bgr, detection.box)
+            tracker_miss_streak = 0
+        if not confirmed and streak >= POLICE_ONLY_CONFIRM_FRAMES:
+            confirmed = True
+            confirmed_detection = detection
+            confirmed_until_frame = frame_count + POLICE_ONLY_HOLD_FRAMES
+        elif confirmed:
+            confirmed_detection = detection
+            confirmed_until_frame = max(confirmed_until_frame, frame_count + POLICE_ONLY_HOLD_FRAMES)
+    else:
+        streak = 0 if detection is not None else streak
+        miss_streak = miss_streak + 1 if detection is not None else miss_streak
+        if confirmed and tracker is not None:
+            updated_box = _update_tracker_box(tracker, img_bgr)
+            if updated_box is not None:
+                tracked_box = updated_box
+                tracker_miss_streak = 0
+            else:
+                tracker_miss_streak += 1
+        elif confirmed and tracked_box is not None:
+            tracker_miss_streak += 1
+
+        if confirmed and confirmed_detection is not None and tracked_box is not None and (
+            frame_count <= confirmed_until_frame
+            or miss_streak < POLICE_ONLY_LOSE_DETECTIONS
+            or tracker_miss_streak <= POLICE_ONLY_HOLD_FRAMES
+        ):
+            display_detection = confirmed_detection
+            display_detection.box = [round(float(v), 2) for v in tracked_box]
+        else:
+            confirmed = False
+            confirmed_detection = None
+            if tracker_miss_streak > POLICE_ONLY_HOLD_FRAMES:
+                tracked_box = None
+                tracker = None
+
+    if display_detection is None:
+        if detection is not None and detection.detected:
+            display_detection = detection
+        elif confirmed and confirmed_detection is not None and tracked_box is not None:
+            display_detection = confirmed_detection
+            display_detection.box = [round(float(v), 2) for v in tracked_box]
+        else:
+            display_detection = detection
+
+    cached.update({
+        "frame": frame_count,
+        "raw_detection": raw_detection,
+        "display_detection": display_detection,
+        "confirmed_detection": confirmed_detection,
+        "streak": streak,
+        "miss_streak": miss_streak,
+        "confirmed_until_frame": confirmed_until_frame,
+        "confirmed": confirmed,
+        "tracked_box": tracked_box,
+        "tracker": tracker,
+        "tracker_miss_streak": tracker_miss_streak,
+    })
+    return cached
+
+
+def _stream_police_detection(
+    stream_id: str,
+    img_bgr: np.ndarray,
+    frame_count: int,
+    police_only: bool,
+) -> dict | None:
+    if not police_only:
+        return None
+
+    cached = _stream_police_detections.get(stream_id)
+    cached = _refresh_police_detection_state(cached, img_bgr, frame_count, police_only)
+    if cached is not None:
+        _stream_police_detections[stream_id] = cached
+    return cached
+
+
+def _prepare_police_pose_source(
+    img_bgr: np.ndarray,
+    police_detection: PoliceOfficerDetection | None,
+) -> tuple[np.ndarray, tuple[int, int, int, int] | None]:
+    if police_detection is None or not police_detection.box:
+        return img_bgr, None
+    cropped, crop_box = _expand_box_to_crop(img_bgr, police_detection.box, img_bgr.shape)
+    if cropped is None or crop_box is None:
+        return img_bgr, None
+    return cropped, crop_box
 
 
 def _write_stream_recognition_record(
@@ -894,7 +1183,13 @@ def process_police_gesture_image(contents: bytes, timestamp: Optional[int] = Non
 #  Video processing
 # ═══════════════════════════════════════════════════════════════
 
-def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Optional[int] = None, filename: Optional[str] = None) -> dict:
+def process_police_gesture_video(
+    contents: bytes,
+    file_ext: str,
+    timestamp: Optional[int] = None,
+    filename: Optional[str] = None,
+    police_only: Optional[bool] = None,
+) -> dict:
     """处理视频文件，返回逐帧识别结果"""
     if timestamp is None:
         timestamp = int(time.time() * 1000)
@@ -919,6 +1214,8 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
         frame_results = []
         frame_idx = 0
         processed = 0
+        police_state: dict | None = None
+        police_only_enabled = is_police_only_mode(police_only)
         lstm_state = (_shared_lstm.h0(), _shared_lstm.c0())
 
         while True:
@@ -927,9 +1224,37 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
                 break
 
             if frame_idx % sample_interval == 0:
-                re_frame = resize_keep_ratio(frame, (512, 512))
+                sample_index = processed + 1
+                police_state = _refresh_police_detection_state(police_state, frame, sample_index, police_only_enabled)
+                police_detection = police_state["display_detection"] if police_state else None
+                police_confirmed = bool(police_state and police_state["confirmed"])
+                police_streak = int(police_state["streak"]) if police_state else 0
+
+                if police_only_enabled and not police_confirmed:
+                    frame_seconds = frame_idx / fps if fps > 0 else 0
+                    frame_results.append(
+                        {
+                            "frame": frame_idx,
+                            "time": round(frame_seconds, 2),
+                            "gesture": GESTURE_NAMES_CN[0],
+                            "gestureId": 0,
+                            "confidence": 0.0,
+                            "keypoints": [],
+                            **_police_detection_payload(police_detection, police_only_enabled, frame.shape, confirmed=police_confirmed, streak=police_streak),
+                        }
+                    )
+                    processed += 1
+                    frame_idx += 1
+                    continue
+
+                pose_src, pose_crop_box = _prepare_police_pose_source(
+                    frame,
+                    police_detection if police_only_enabled and police_confirmed else None,
+                )
+                re_frame = resize_keep_ratio(pose_src, (512, 512))
                 gesture_id, scores_arr, lstm_state, coord_norm = predict_video_frame(re_frame, lstm_state)
-                display_coord_norm = unletterbox_keypoints(coord_norm, frame.shape)
+                display_coord_norm = unletterbox_keypoints(coord_norm, pose_src.shape)
+                display_coord_norm = _remap_keypoints_from_crop(display_coord_norm, pose_crop_box, frame.shape)
                 scores = _scores_to_probs(scores_arr)
                 confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
 
@@ -942,6 +1267,7 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
                         "gestureId": gesture_id,
                         "confidence": round(confidence, 4),
                         "keypoints": _keypoints_to_list(display_coord_norm),
+                        **_police_detection_payload(police_detection, police_only_enabled, frame.shape, confirmed=police_confirmed, streak=police_streak),
                     }
                 )
                 processed += 1
@@ -961,6 +1287,8 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
             duration=duration,
             processed=processed,
         )
+        result["policeOnly"] = police_only_enabled
+        result["policeDetectionInterval"] = POLICE_ONLY_DETECT_INTERVAL if police_only_enabled else None
         logger.info(
             "交警手势视频识别: %s (%d帧, %d个手势段, %.0fms)",
             result["gesture"],
@@ -1020,7 +1348,12 @@ def process_police_gesture_video(contents: bytes, file_ext: str, timestamp: Opti
 #  Video stream processing (SSE generator)
 # ═══════════════════════════════════════════════════════════════
 
-def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filename: Optional[str] = None) -> Generator[str, None, None]:
+def generate_police_gesture_video_stream(
+    contents: bytes,
+    file_ext: str,
+    filename: Optional[str] = None,
+    police_only: Optional[bool] = None,
+) -> Generator[str, None, None]:
     """视频流式识别生成器: 边分析边产生 SSE 事件"""
     timestamp = int(time.time() * 1000)
     video_session_id = str(uuid.uuid4())  # 本次视频的唯一标识
@@ -1056,6 +1389,8 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
         frame_results = []
         frame_idx = 0
         processed = 0
+        police_state: dict | None = None
+        police_only_enabled = is_police_only_mode(police_only)
         lstm_state = (_shared_lstm.h0(), _shared_lstm.c0())
 
         while True:
@@ -1064,9 +1399,44 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
                 break
 
             if frame_idx % sample_interval == 0:
-                re_frame = resize_keep_ratio(frame, (512, 512))
+                sample_index = processed + 1
+                police_state = _refresh_police_detection_state(police_state, frame, sample_index, police_only_enabled)
+                police_detection = police_state["display_detection"] if police_state else None
+                police_confirmed = bool(police_state and police_state["confirmed"])
+                police_streak = int(police_state["streak"]) if police_state else 0
+
+                if police_only_enabled and not police_confirmed:
+                    frame_seconds = frame_idx / fps if fps > 0 else 0
+                    frame_result = {
+                        "frame": frame_idx,
+                        "time": round(frame_seconds, 2),
+                        "gesture": GESTURE_NAMES_CN[0],
+                        "gestureId": 0,
+                        "confidence": 0.0,
+                        "keypoints": [],
+                        **_police_detection_payload(police_detection, police_only_enabled, frame.shape, confirmed=police_confirmed, streak=police_streak),
+                    }
+                    frame_results.append(frame_result)
+                    processed += 1
+                    yield _sse_event(
+                        "frame",
+                        {
+                            **_with_display_time(frame_result),
+                            "frames_processed": processed,
+                            "progress": round(min(99, (frame_idx + 1) / total_frames * 100), 1),
+                        },
+                    )
+                    frame_idx += 1
+                    continue
+
+                pose_src, pose_crop_box = _prepare_police_pose_source(
+                    frame,
+                    police_detection if police_only_enabled and police_confirmed else None,
+                )
+                re_frame = resize_keep_ratio(pose_src, (512, 512))
                 gesture_id, scores_arr, lstm_state, coord_norm = predict_video_frame(re_frame, lstm_state)
-                display_coord_norm = unletterbox_keypoints(coord_norm, frame.shape)
+                display_coord_norm = unletterbox_keypoints(coord_norm, pose_src.shape)
+                display_coord_norm = _remap_keypoints_from_crop(display_coord_norm, pose_crop_box, frame.shape)
                 scores = _scores_to_probs(scores_arr)
                 confidence = float(scores[gesture_id]) if gesture_id < len(scores) else 0.0
                 frame_seconds = frame_idx / fps if fps > 0 else 0
@@ -1077,6 +1447,7 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
                     "gestureId": gesture_id,
                     "confidence": round(confidence, 4),
                     "keypoints": _keypoints_to_list(display_coord_norm),
+                    **_police_detection_payload(police_detection, police_only_enabled, frame.shape, confirmed=police_confirmed, streak=police_streak),
                 }
                 frame_results.append(frame_result)
                 processed += 1
@@ -1104,6 +1475,8 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
             duration=duration,
             processed=processed,
         )
+        result["policeOnly"] = police_only_enabled
+        result["policeDetectionInterval"] = POLICE_ONLY_DETECT_INTERVAL if police_only_enabled else None
         logger.info(
             "交警手势流式视频识别完成: %s (%d帧, %d个手势段, %.0fms)",
             result["gesture"],
@@ -1203,13 +1576,14 @@ def generate_police_gesture_video_stream(contents: bytes, file_ext: str, filenam
 
 # 流式帧处理参数
 STREAM_HISTORY_MAX = 15       # 累积帧数 (~7.5s@500ms), 用于平滑分段
-STREAM_SMOOTH_WINDOW = 5      # 平滑滑动窗口
-STREAM_WARMUP_FRAMES = 15     # LSTM 预热帧数
+STREAM_SMOOTH_WINDOW = 3      # 平滑滑动窗口
+STREAM_WARMUP_FRAMES = 10     # LSTM 预热帧数
 STREAM_MIN_SEGMENT_FRAMES = 2  # 手势至少连续 N 帧才确认新段
-STREAM_POSE_MIN_QUALITY = _env_float("CARMATE_STREAM_POSE_MIN_QUALITY", 0.55)
-STREAM_MIN_CONFIDENCE = _env_float("CARMATE_STREAM_MIN_CONFIDENCE", 0.18)
-STREAM_SWITCH_MIN_FRAMES = max(1, _env_int("CARMATE_STREAM_SWITCH_MIN_FRAMES", 2))
+STREAM_POSE_MIN_QUALITY = _env_float("CARMATE_STREAM_POSE_MIN_QUALITY", 0.45)
+STREAM_MIN_CONFIDENCE = _env_float("CARMATE_STREAM_MIN_CONFIDENCE", 0.12)
+STREAM_SWITCH_MIN_FRAMES = max(1, _env_int("CARMATE_STREAM_SWITCH_MIN_FRAMES", 1))
 STREAM_KEEP_LAST_SECONDS = _env_float("CARMATE_STREAM_KEEP_LAST_SECONDS", 1.2)
+STREAM_POSE_REUSE_FRAMES = max(0, _env_int("CARMATE_STREAM_POSE_REUSE_FRAMES", 2))
 
 
 def _stream_smooth_vote(history: list[dict]) -> tuple[int, float]:
@@ -1291,7 +1665,7 @@ def _stable_stream_result(stream_id: str, proposed_gid: int, proposed_conf: floa
     return stable_gid, float(stable["confidence"]), False
 
 
-def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
+def process_stream_frame(contents: bytes, stream_id: str = "default", police_only: Optional[bool] = None) -> dict:
     """处理实时摄像头的单帧图像
 
     改进策略:
@@ -1311,7 +1685,6 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
 
     img_array = np.array(image)
     img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-    re_frame = resize_keep_ratio(img_bgr, (512, 512))
 
     now = time.time()
     now_ms = int(now * 1000)
@@ -1319,6 +1692,36 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
     # ---- 帧计数 (用于预热判断) ----
     fc = _stream_frame_count.get(stream_id, 0) + 1
     _stream_frame_count[stream_id] = fc
+    police_only_enabled = is_police_only_mode(police_only)
+    police_state = _stream_police_detection(stream_id, img_bgr, fc, police_only_enabled)
+    police_detection = police_state["display_detection"] if police_state else None
+    police_confirmed = bool(police_state and police_state["confirmed"])
+    police_streak = int(police_state["streak"]) if police_state else 0
+    if police_only_enabled and not police_confirmed:
+        return {
+            "code": 200,
+            "message": "success",
+            "data": {
+                "streamId": stream_id,
+                "frameCount": fc,
+                "gesture": GESTURE_NAMES_CN[0],
+                "gestureId": 0,
+                "confidence": 0.0,
+                "timestamp": now_ms,
+                "top5": [],
+                "inference_ms": 0.0,
+                "poseQuality": {"score": 0.0, "valid": False},
+                "keypoints": [],
+                "validPose": False,
+                "history": [],
+                "segments": _stream_segments.get(stream_id, []),
+                "currentSegment": _stream_segments.get(stream_id, [])[-1] if _stream_segments.get(stream_id) else None,
+                "segmentChanged": False,
+                "stableChanged": False,
+                "warmup": fc <= STREAM_WARMUP_FRAMES,
+                **_police_detection_payload(police_detection, police_only_enabled, img_bgr.shape, confirmed=police_confirmed, streak=police_streak),
+            },
+        }
 
     # 首帧 & 入口日志 (DEBUG)
     if fc == 1:
@@ -1332,10 +1735,35 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
     if lstm_state is None:
         lstm_state = (_shared_lstm.h0(), _shared_lstm.c0())
 
-    lstm_gid, scores_arr, lstm_state, pose_quality, state_updated, coord_norm = predict_stream_frame_candidate(re_frame, lstm_state)
-    display_coord_norm = unletterbox_keypoints(coord_norm, img_bgr.shape)
+    pose_source_img, pose_crop_box = _prepare_police_pose_source(
+        img_bgr,
+        police_detection if police_only_enabled and police_confirmed else None,
+    )
+    pose_source_key = "crop" if pose_crop_box is not None else "full"
+    last_pose_entry = _stream_last_valid_pose.get(stream_id)
+    last_pose_coord = last_pose_entry.get("coord") if last_pose_entry else None
+    last_pose_age = int(last_pose_entry.get("age", 0)) if last_pose_entry else 0
+    fallback_coord = (
+        last_pose_coord
+        if last_pose_entry is not None
+        and last_pose_entry.get("source_key") == pose_source_key
+        and last_pose_age <= STREAM_POSE_REUSE_FRAMES
+        else None
+    )
+    re_frame = resize_keep_ratio(pose_source_img, (512, 512))
+    lstm_gid, scores_arr, lstm_state, pose_quality, state_updated, coord_norm = predict_stream_frame_candidate(
+        re_frame,
+        lstm_state,
+        fallback_coord_norm_2d=fallback_coord,
+    )
+    display_coord_norm = unletterbox_keypoints(coord_norm, pose_source_img.shape)
+    display_coord_norm = _remap_keypoints_from_crop(display_coord_norm, pose_crop_box, img_bgr.shape)
     if state_updated:
         _stream_states[stream_id] = lstm_state
+        _stream_last_valid_pose[stream_id] = {"coord": coord_norm, "age": 0, "source_key": pose_source_key}
+    elif last_pose_entry is not None:
+        last_pose_entry["age"] = last_pose_age + 1
+        _stream_last_valid_pose[stream_id] = last_pose_entry
 
     if isinstance(scores_arr, np.ndarray):
         t = _torch.from_numpy(scores_arr).float()
@@ -1592,5 +2020,6 @@ def process_stream_frame(contents: bytes, stream_id: str = "default") -> dict:
             "segmentChanged": segment_changed,
             "stableChanged": stable_changed,
             "warmup": fc <= STREAM_WARMUP_FRAMES,
+            **_police_detection_payload(police_detection, police_only_enabled, img_bgr.shape, confirmed=police_confirmed, streak=police_streak),
         },
     }

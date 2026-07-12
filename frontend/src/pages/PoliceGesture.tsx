@@ -6,6 +6,7 @@ import {
   Descriptions,
   Empty,
   Progress,
+  Segmented,
   Space,
   Tag,
   Upload,
@@ -61,6 +62,21 @@ type FrameResult = {
   gestureId: number;
   confidence: number;
   keypoints?: number[][];   // 14 [x,y] pairs from pose estimation
+  policeOnly?: boolean;
+  policeDetected?: boolean;
+  policeCandidateDetected?: boolean;
+  policeConfirmed?: boolean;
+  policeConfirmStreak?: number;
+  policeRequiredConfirmFrames?: number;
+  policeConfidence?: number;
+  policeClass?: string;
+  policeBox?: number[];
+  policeBoxNorm?: number[];
+  policeCandidateConfidence?: number;
+  policeCandidateClass?: string;
+  policeNegativeConfidence?: number;
+  policeNegativeClass?: string;
+  policeRejectReason?: string | null;
 };
 
 type Segment = {
@@ -89,6 +105,21 @@ type StreamRecord = PoliceGestureResult & {
   singleGesture?: string;
   singleGestureId?: number;
   singleConfidence?: number;
+  policeOnly?: boolean;
+  policeDetected?: boolean;
+  policeCandidateDetected?: boolean;
+  policeConfirmed?: boolean;
+  policeConfirmStreak?: number;
+  policeRequiredConfirmFrames?: number;
+  policeConfidence?: number;
+  policeClass?: string;
+  policeBox?: number[];
+  policeBoxNorm?: number[];
+  policeCandidateConfidence?: number;
+  policeCandidateClass?: string;
+  policeNegativeConfidence?: number;
+  policeNegativeClass?: string;
+  policeRejectReason?: string | null;
   validPose?: boolean;
   poseQuality?: {
     score?: number;
@@ -102,6 +133,7 @@ type PendingUpload = {
   file: File;
   uploadSeq: number;
   abortController: AbortController;
+  policeOnly: boolean;
 };
 
 const STREAM_ID = 'web-camera-police-gesture';
@@ -109,6 +141,17 @@ const STREAM_INTERVAL_MS = 200;   // 200ms = 5fps, 保证每个手势能采到�
 const STREAM_FRAME_MAX_WIDTH = 768;
 const STREAM_JPEG_QUALITY = 0.84;
 const LIVE_LABEL_HOLD_SECONDS = 1.0;
+type RecognitionMode = 'all' | 'police_only';
+type PoliceDetectionOverlay = {
+  policeCandidateDetected?: boolean;
+  policeDetected?: boolean;
+  policeConfirmed?: boolean;
+  policeConfirmStreak?: number;
+  policeRequiredConfirmFrames?: number;
+  policeConfidence?: number;
+  policeClass?: string;
+  policeBoxNorm?: number[];
+};
 
 // 14 keypoints (0-indexed AI Challenger):
 // 0=右肩, 1=右肘, 2=右腕, 3=左肩, 4=左肘, 5=左腕,
@@ -178,6 +221,7 @@ const drawSkeleton = (
   keypoints: number[][] | undefined,
   isValid: boolean,
   mediaEl?: HTMLVideoElement | null,
+  policeDetection?: PoliceDetectionOverlay,
 ) => {
   if (!canvas || !containerEl) return;
   const ctx = canvas.getContext('2d');
@@ -204,8 +248,6 @@ const drawSkeleton = (
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, rect.width, rect.height);
 
-  if (!keypoints || keypoints.length < 14) return;
-
   let mediaLeft = 0;
   let mediaTop = 0;
   let mediaWidth = rect.width;
@@ -222,6 +264,35 @@ const drawSkeleton = (
       mediaTop = (rect.height - mediaHeight) / 2;
     }
   }
+
+  const box = policeDetection?.policeBoxNorm;
+  const hasCandidate = Boolean(policeDetection?.policeCandidateDetected ?? policeDetection?.policeDetected);
+  const isConfirmed = Boolean(policeDetection?.policeConfirmed ?? policeDetection?.policeDetected);
+  if (hasCandidate && box && box.length === 4) {
+    const [x1, y1, x2, y2] = box;
+    const left = mediaLeft + x1 * mediaWidth;
+    const top = mediaTop + y1 * mediaHeight;
+    const width = Math.max(1, (x2 - x1) * mediaWidth);
+    const height = Math.max(1, (y2 - y1) * mediaHeight);
+    const label = `${policeDetection.policeClass || 'traffic police'} ${Math.round((policeDetection.policeConfidence || 0) * 100)}%`;
+    const color = isConfirmed ? '#13c2c2' : '#faad14';
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.globalAlpha = 1;
+    ctx.strokeRect(left, top, width, height);
+    ctx.font = '600 14px Microsoft YaHei, sans-serif';
+    const labelWidth = Math.min(ctx.measureText(label).width + 12, rect.width - 8);
+    const labelTop = Math.max(0, top - 24);
+    ctx.fillStyle = isConfirmed ? 'rgba(19, 194, 194, 0.92)' : 'rgba(250, 173, 20, 0.92)';
+    ctx.fillRect(left, labelTop, labelWidth, 22);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, left + 6, labelTop + 16);
+    ctx.restore();
+  }
+
+  if (!keypoints || keypoints.length < 14) return;
 
   // Scale normalized [0,1] coords to the actual rendered video area.
   const points = keypoints.map(([x, y]) => ({
@@ -306,6 +377,8 @@ const PoliceGesture: React.FC = () => {
   const [playbackTime, setPlaybackTime] = React.useState(0);
   const [streaming, setStreaming] = React.useState(false);
   const [streamBusy, setStreamBusy] = React.useState(false);
+  const [recognitionMode, setRecognitionMode] = React.useState<RecognitionMode>('all');
+  const policeOnly = recognitionMode === 'police_only';
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
@@ -395,10 +468,10 @@ const PoliceGesture: React.FC = () => {
     const onFrame = (mediaTime?: number) => {
       if (!running) return;
       const pt = Math.max(0, mediaTime ?? video.currentTime);
-      const past = frames.filter((f) => getSkeletonFrameTime(f) <= pt && f.keypoints?.length);
+      const past = frames.filter((f) => getSkeletonFrameTime(f) <= pt && (f.keypoints?.length || f.policeDetected));
       const match = past[past.length - 1];
       if (match && pt - getSkeletonFrameTime(match) <= SKELETON_HOLD_SECONDS) {
-        drawSkeleton(canvas, containerEl, match.keypoints, true, video);
+        drawSkeleton(canvas, containerEl, match.keypoints, true, video, match);
       } else {
         drawSkeleton(canvas, containerEl, undefined, true, video);
       }
@@ -454,7 +527,7 @@ const PoliceGesture: React.FC = () => {
   const primarySummary = segmentSummaries[0];
 
   const startStreamAnalysis = useCallback(async (pending: PendingUpload) => {
-    const { file, uploadSeq, abortController } = pending;
+    const { file, uploadSeq, abortController, policeOnly: pendingPoliceOnly } = pending;
     if (analysisStartedRef.current || uploadSeqRef.current !== uploadSeq) return;
 
     analysisStartedRef.current = true;
@@ -485,6 +558,16 @@ const PoliceGesture: React.FC = () => {
               gestureId: frame.gestureId,
               confidence: frame.confidence,
               keypoints: frame.keypoints,
+              policeOnly: frame.policeOnly,
+              policeDetected: frame.policeDetected,
+              policeCandidateDetected: frame.policeCandidateDetected,
+              policeConfirmed: frame.policeConfirmed,
+              policeConfirmStreak: frame.policeConfirmStreak,
+              policeRequiredConfirmFrames: frame.policeRequiredConfirmFrames,
+              policeConfidence: frame.policeConfidence,
+              policeClass: frame.policeClass,
+              policeBox: frame.policeBox,
+              policeBoxNorm: frame.policeBoxNorm,
             })]);
             setProgress(Math.max(1, Math.min(99, Number(frame.progress) || 1)));
             return;
@@ -526,6 +609,7 @@ const PoliceGesture: React.FC = () => {
           }
         },
         abortController.signal,
+        pendingPoliceOnly,
       );
     } catch (error) {
       if (abortController.signal.aborted) return;
@@ -588,7 +672,7 @@ const PoliceGesture: React.FC = () => {
 
     const abortController = new AbortController();
     uploadAbortRef.current = abortController;
-    pendingUploadRef.current = { file, uploadSeq, abortController };
+    pendingUploadRef.current = { file, uploadSeq, abortController, policeOnly };
     analysisStartedRef.current = false;
 
     setLoading(true);
@@ -669,7 +753,7 @@ const PoliceGesture: React.FC = () => {
       }
 
       try {
-        const response = await recognizePoliceGestureFrame(blob, STREAM_ID);
+        const response = await recognizePoliceGestureFrame(blob, STREAM_ID, policeOnly);
         const data = ((response.data as any).data || response.data) as StreamRecord & { keypoints?: number[][] };
         storeSetStreamResult(data);
         storeAddStreamHistory(data);
@@ -677,7 +761,7 @@ const PoliceGesture: React.FC = () => {
         // Draw skeleton overlay on webcam video
         const containerEl = streamSkeletonCanvasRef.current?.parentElement;
         if (containerEl) {
-          drawSkeleton(streamSkeletonCanvasRef.current, containerEl, data.keypoints, data.validPose ?? true, video);
+          drawSkeleton(streamSkeletonCanvasRef.current, containerEl, data.keypoints, data.validPose ?? true, video, data);
         }
       } catch (error) {
         console.error('stream frame failed:', error);
@@ -687,7 +771,7 @@ const PoliceGesture: React.FC = () => {
         setStreamBusy(false);
       }
     }, 'image/jpeg', STREAM_JPEG_QUALITY);
-  }, [storeAddStreamHistory, storeSetStreamResult]);
+  }, [policeOnly, storeAddStreamHistory, storeSetStreamResult]);
 
   const startCamera = async () => {
     try {
@@ -735,6 +819,18 @@ const PoliceGesture: React.FC = () => {
 
   const streamLabel = getGestureLabel(streamResult?.gestureId, streamResult?.gesture);
   const streamColor = getGestureColor(streamResult?.gestureId);
+  const policeGateConfirmed = Boolean(streamResult?.policeConfirmed ?? streamResult?.policeDetected);
+  const policeGateCandidate = Boolean(streamResult?.policeCandidateDetected ?? streamResult?.policeDetected);
+  const streamDisplayLabel = policeOnly
+    ? (policeGateConfirmed
+        ? streamLabel
+        : policeGateCandidate
+          ? `交警候选 ${streamResult?.policeClass || 'traffic police'}`
+          : '未检测到交警')
+    : streamLabel;
+  const streamDisplayColor = policeOnly
+    ? (policeGateConfirmed ? streamColor : '#faad14')
+    : streamColor;
 
   return (
     <div>
@@ -755,6 +851,24 @@ const PoliceGesture: React.FC = () => {
           </Space>
         }
       />
+
+      <Card style={{ marginBottom: 16 }}>
+        <Space align="center" wrap>
+          <span style={{ color: '#595959' }}>识别模式</span>
+          <Segmented
+            value={recognitionMode}
+            disabled={loading || streaming}
+            onChange={(value) => setRecognitionMode(value as RecognitionMode)}
+            options={[
+              { label: '全部人体', value: 'all' },
+              { label: '仅交警', value: 'police_only' },
+            ]}
+          />
+          {policeOnly && (
+            <Tag color="blue">YOLO-World</Tag>
+          )}
+        </Space>
+      </Card>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1.3fr) minmax(320px, 0.7fr)', gap: 16 }}>
         <Card
@@ -1056,13 +1170,13 @@ const PoliceGesture: React.FC = () => {
                 top: 16,
                 padding: '8px 14px',
                 borderRadius: 6,
-                background: streamColor,
+                background: streamDisplayColor,
                 color: '#fff',
                 fontSize: 20,
                 fontWeight: 700,
               }}
             >
-              {streamLabel}
+              {streamDisplayLabel}
             </div>
             {streamResult && (
               <div style={{ position: 'absolute', right: 16, bottom: 16, padding: '6px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.65)', color: '#fff' }}>
@@ -1076,14 +1190,14 @@ const PoliceGesture: React.FC = () => {
         <Card title="实时识别结果">
           {streamResult ? (
             <div style={{ textAlign: 'center' }}>
-              <Tag color={streamColor} style={{ fontSize: 22, padding: '6px 20px', marginBottom: 16 }}>
-                {streamLabel}
+              <Tag color={streamDisplayColor} style={{ fontSize: 22, padding: '6px 20px', marginBottom: 16 }}>
+                {streamDisplayLabel}
               </Tag>
               <Progress
                 type="circle"
                 percent={Math.round(streamResult.confidence * 100)}
                 size={96}
-                strokeColor={streamColor}
+                strokeColor={streamDisplayColor}
               />
               <Descriptions size="small" column={1} style={{ marginTop: 16, textAlign: 'left' }}>
                 <Descriptions.Item label="推理耗时">{streamResult.inference_ms?.toFixed(0) || 0} ms</Descriptions.Item>
@@ -1093,6 +1207,18 @@ const PoliceGesture: React.FC = () => {
                     : '-'}
                   {streamResult.validPose === false ? '（未稳定捕获人体）' : ''}
                 </Descriptions.Item>
+                {policeOnly && (
+                  <Descriptions.Item label="YOLO-World">
+                    {streamResult.policeDetected
+                      ? `${streamResult.policeClass || 'traffic police'} ${((streamResult.policeConfidence || 0) * 100).toFixed(0)}%`
+                      : (streamResult.policeDetectionError
+                          ? `error: ${streamResult.policeDetectionError}`
+                          : `${streamResult.policeCandidateDetected ? 'candidate, waiting confirm' : (streamResult.policeRejectReason || 'not traffic police')}${streamResult.policeNegativeClass ? ` (${streamResult.policeNegativeClass} ${((streamResult.policeNegativeConfidence || 0) * 100).toFixed(0)}%)` : ''}`)}
+                    {streamResult.policeCandidateDetected && !streamResult.policeDetected
+                      ? ` ${streamResult.policeConfirmStreak || 0}/${streamResult.policeRequiredConfirmFrames || 0}`
+                      : ''}
+                  </Descriptions.Item>
+                )}
                 <Descriptions.Item label="Raw">
                   {getGestureLabel(streamResult.rawGestureId, streamResult.rawGesture)}
                   {streamResult.rawConfidence !== undefined ? ` ${(streamResult.rawConfidence * 100).toFixed(0)}%` : ''}
