@@ -47,6 +47,20 @@ def ensure_police_gesture_model_loaded():
     _models_loaded = True
 
 
+def _extract_client_info(request: Request | None) -> str | None:
+    """从请求中提取客户端信息 (IP + User-Agent 摘要)"""
+    if request is None:
+        return None
+    parts = []
+    if request.client and request.client.host:
+        parts.append(request.client.host)
+    ua = request.headers.get("user-agent", "")
+    if ua:
+        # 截取前80字符, 避免太长
+        parts.append(ua[:80])
+    return " | ".join(parts) if parts else None
+
+
 @router.get("/health")
 async def health_check():
     device_info = get_torch_device_info()
@@ -100,6 +114,7 @@ async def recognize_police_gesture(
         )
         raise HTTPException(400, str(e))
     except Exception as exc:
+        client_info = _extract_client_info(request)
         log_recognition(
             db,
             record_type="police_gesture",
@@ -109,7 +124,7 @@ async def recognize_police_gesture(
             file_name=file.filename,
             user=user,
         )
-        logger.exception(f"交警手势识别失败: {exc}")
+        logger.exception("交警手势识别失败: %s, client=%s", exc, client_info or "-")
         log_gesture_async(
             GestureLogEntry(
                 recognition_type="image" if file_ext not in VIDEO_EXTENSIONS else "video",
@@ -120,6 +135,7 @@ async def recognize_police_gesture(
                 success=False,
                 filename=file.filename,
                 error_message=str(exc),
+                client_info=client_info,
             )
         )
         event_collector.collect(AnomalyEvent(
@@ -156,16 +172,34 @@ async def reset_police_gesture_stream(stream_id: str = Form("default")):
 async def recognize_police_gesture_stream_frame(
     file: UploadFile = File(...),
     stream_id: str = Form("default"),
+    request: Request = None,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user),
 ):
     """实时摄像头截帧识别。"""
     ensure_police_gesture_model_loaded()
     contents = await file.read()
+    client_info = _extract_client_info(request)
     try:
-        return process_stream_frame(contents, stream_id)
+        result = process_stream_frame(contents, stream_id)
+        data = result.get("data", {}) if isinstance(result, dict) else {}
+        # 新段确认时写 RecognitionRecord (含用户信息)
+        if data.get("segmentChanged"):
+            log_recognition(
+                db,
+                record_type="police_gesture",
+                source_type="camera_stream",
+                success=True,
+                summary=build_gesture_summary(data),
+                result=data,
+                session_id=stream_id,
+                user=user,
+            )
+        return result
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as exc:
-        logger.exception(f"实时帧识别失败: {exc}")
+        logger.exception("实时帧识别失败: stream_id=%s, err=%s", stream_id, exc)
         log_gesture_async(
             GestureLogEntry(
                 recognition_type="camera_stream",
@@ -175,6 +209,7 @@ async def recognize_police_gesture_stream_frame(
                 inference_ms=0.0,
                 success=False,
                 error_message=str(exc),
+                client_info=client_info,
             )
         )
         raise HTTPException(500, f"识别失败: {str(exc)}")

@@ -6,7 +6,6 @@ import type {
   DriverGestureResult,
   Alert,
   HistoryRecord,
-  DashboardStats,
   TrackSessionResponse,
   StreamStartResponse,
   TrackingSessionInfo,

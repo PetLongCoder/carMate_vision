@@ -30,6 +30,7 @@ from app.api.v1 import (
 )
 from app.core.database import SessionLocal, init_db
 from app.api.v1.auth import seed_default_users
+from app.services.user_privacy_service import migrate_user_privacy_fields
 from app.services.session_manager import (
     SessionStatus,
     SessionType,
@@ -55,6 +56,9 @@ async def lifespan(app: FastAPI):
         db = SessionLocal()
         try:
             seed_default_users(db)
+            migrated = migrate_user_privacy_fields(db)
+            if migrated:
+                logger.info(f"已加密 {migrated} 个用户的隐私字段")
         finally:
             db.close()
         logger.info("数据库初始化完成")

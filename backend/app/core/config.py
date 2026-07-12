@@ -27,6 +27,12 @@ class Settings:
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRE_HOURS: int = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
+    # 用户隐私字段 AES 加密密钥（小项目开发环境全队共用，见 .env.example）
+    DATA_ENCRYPTION_KEY: str = os.getenv(
+        "DATA_ENCRYPTION_KEY",
+        "carmate-dev-privacy-key-32bytes!!",
+    )
+
     CODE_TTL_SECONDS: int = int(os.getenv("CODE_TTL_SECONDS", "300"))
 
     WECHAT_MOCK_ENABLED: bool = os.getenv("WECHAT_MOCK_ENABLED", "true").lower() == "true"

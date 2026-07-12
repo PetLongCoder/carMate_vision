@@ -19,6 +19,11 @@ from app.core.security import hash_password
 from app.models.auth_schemas import AuthResponse, UserOut, WechatConfirmRequest, WechatPollResponse
 from app.models.db_models import User
 from app.services.operation_log_service import log_operation
+from app.services.user_privacy_service import (
+    assign_wechat_openid,
+    find_user_by_wechat_openid,
+    get_wechat_openid_plain,
+)
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/auth/wechat", tags=["微信登录(Mock)"])
@@ -88,7 +93,7 @@ def _resolve_or_create_user(
     mock_openid: str,
     nickname: str | None,
 ) -> User:
-    user = db.query(User).filter(User.wechat_openid == mock_openid).first()
+    user = find_user_by_wechat_openid(db, mock_openid)
     if user:
         if nickname and nickname.strip() and user.nickname != nickname.strip():
             user.nickname = nickname.strip()
@@ -100,11 +105,11 @@ def _resolve_or_create_user(
     user = User(
         username=_generate_unique_username(db, mock_openid),
         password_hash=hash_password(secrets.token_urlsafe(24)),
-        wechat_openid=mock_openid,
         nickname=display_name,
         avatar_url=MOCK_AVATAR,
         role="user",
     )
+    assign_wechat_openid(user, mock_openid)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -126,11 +131,11 @@ def _bind_wechat_to_user(
     if user.wechat_openid:
         return "您已绑定微信"
 
-    owner = db.query(User).filter(User.wechat_openid == mock_openid).first()
+    owner = find_user_by_wechat_openid(db, mock_openid)
     if owner and owner.id != user.id:
         return "该微信已被其他账号绑定"
 
-    user.wechat_openid = mock_openid
+    assign_wechat_openid(user, mock_openid)
     if not user.avatar_url:
         user.avatar_url = MOCK_AVATAR
     if nickname and nickname.strip() and not user.nickname:
@@ -341,7 +346,7 @@ def get_wechat_profile(mock_openid: str, db: Session = Depends(get_db)):
     if not openid:
         return ok({"exists": False})
 
-    user = db.query(User).filter(User.wechat_openid == openid).first()
+    user = find_user_by_wechat_openid(db, openid)
     if not user:
         return ok({"exists": False})
 
@@ -392,9 +397,9 @@ def confirm_wechat_login(body: WechatConfirmRequest, request: Request, db: Sessi
         guard = ensure_can_remove_method(target, "wechat")
         if guard:
             return fail(guard)
-        if target.wechat_openid != mock_openid:
+        if get_wechat_openid_plain(target) != mock_openid:
             return fail("请使用已绑定的微信身份确认解绑")
-        target.wechat_openid = None
+        assign_wechat_openid(target, None)
         db.commit()
         db.refresh(target)
         user_payload = user_to_out(target).model_dump()
@@ -411,19 +416,19 @@ def confirm_wechat_login(body: WechatConfirmRequest, request: Request, db: Sessi
             return fail("账号未绑定微信")
 
         if session.rebind_step == 1:
-            if target.wechat_openid != mock_openid:
+            if get_wechat_openid_plain(target) != mock_openid:
                 return fail("请先使用当前绑定的微信扫码确认")
             session.rebind_step = 2
             session.status = "waiting"
             session.returned_openid = mock_openid
             return ok({"message": "旧微信验证成功，请再次扫码确认新微信", "step": 2})
 
-        if mock_openid == target.wechat_openid:
+        if mock_openid == get_wechat_openid_plain(target):
             return fail("新微信不能与当前微信相同")
-        owner = db.query(User).filter(User.wechat_openid == mock_openid).first()
+        owner = find_user_by_wechat_openid(db, mock_openid)
         if owner and owner.id != target.id:
             return fail("该微信已被其他账号绑定")
-        target.wechat_openid = mock_openid
+        assign_wechat_openid(target, mock_openid)
         if not target.avatar_url:
             target.avatar_url = MOCK_AVATAR
         db.commit()
