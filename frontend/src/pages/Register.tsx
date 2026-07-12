@@ -35,7 +35,7 @@ const Register: React.FC = () => {
 
   const smsSentHint =
     import.meta.env.DEV
-      ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
+      ? import.meta.env.VITE_USE_MOCK_AUTH === 'true'
         ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
         : '验证码已发送（请在后端终端查看验证码）'
       : '验证码已发送';
@@ -239,7 +239,7 @@ const Register: React.FC = () => {
           <Link to="/login">返回登录</Link>
         </div>
 
-        {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH !== 'false' && (
+        {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH === 'true' && (
           <div
             style={{
               marginTop: 16,

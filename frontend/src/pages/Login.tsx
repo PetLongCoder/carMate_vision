@@ -85,7 +85,7 @@ const Login: React.FC = () => {
       await sendSmsCode({ phone, scene: 'login' });
       message.success(
         import.meta.env.DEV
-          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
+          ? import.meta.env.VITE_USE_MOCK_AUTH === 'true'
             ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
             : '验证码已发送（请在后端终端查看验证码）'
           : '验证码已发送',
@@ -248,7 +248,7 @@ const Login: React.FC = () => {
           </Form>
         )}
 
-        {activeRole === 'user' && import.meta.env.VITE_USE_MOCK_AUTH === 'false' && (
+        {activeRole === 'user' && import.meta.env.VITE_USE_MOCK_AUTH !== 'true' && (
           <>
             <Divider plain style={{ margin: '8px 0 16px' }}>
               其他登录方式
@@ -282,7 +282,7 @@ const Login: React.FC = () => {
           onSuccess={finishLogin}
         />
 
-        {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH !== 'false' && (
+        {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH === 'true' && (
           <div
             style={{
               marginTop: 16,

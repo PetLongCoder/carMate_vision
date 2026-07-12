@@ -26,7 +26,7 @@ import type {
   UpdateProfileRequest,
 } from '../types';
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK_AUTH !== 'false';
+const USE_MOCK = import.meta.env.VITE_USE_MOCK_AUTH === 'true';
 
 const MOCK_USERS_KEY = 'carmate_mock_users';
 const MOCK_CODES_KEY = 'carmate_mock_codes';
