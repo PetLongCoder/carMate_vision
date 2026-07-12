@@ -87,13 +87,12 @@ async def _run_detection(
         logger.warning(f"检测帧 {frame_idx} 异常: {exc}")
         return
 
-    if results:
-        ts = frame_idx / fps if fps > 0 else 0
-        await session.broadcast({
-            "type": "detection", "sessionId": session.session_id,
-            "frameNumber": frame_idx, "timestamp": round(ts, 3),
-            "fps": fps, "detections": results,
-        })
+    ts = frame_idx / fps if fps > 0 else 0
+    await session.broadcast({
+        "type": "detection", "sessionId": session.session_id,
+        "frameNumber": frame_idx, "timestamp": round(ts, 3),
+        "fps": fps, "detections": results or [],
+    })
 
     # 检测完成后推一帧标注画面到 MJPEG（覆盖原始帧）
     if annotated is not None and annotated.size > 0:

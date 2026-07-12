@@ -1,10 +1,10 @@
 """
 车辆检测 + 车牌识别服务
-核心方案：HyperLPR3 全图车牌检测与识别（主），YOLOv8 车辆检测（辅）
+核心方案：HyperLPR3 全图车牌检测与识别（主），YOLOv11 车辆检测（辅）
 
 模型说明：
 - HyperLPR3 内置的检测/识别模型基于 CCPD 数据集训练，专为中国车牌优化
-- YOLOv8 使用 COCO 预训练权重，用于检测车辆（car/truck/bus）
+- YOLOv11 使用 COCO 预训练权重，用于检测车辆（car/truck/bus）
 
 CCPD 数据集：https://github.com/zexi-liu7/CCPD
 """
@@ -117,18 +117,18 @@ def _env_float(name: str, default: float) -> float:
 
 
 class VehicleDetector:
-    """YOLOv8 车辆检测器（辅助功能）"""
+    """YOLOv11 车辆检测器（辅助功能）"""
 
-    def __init__(self, model_path: str = "yolov8n.pt", conf: float = None):
-        logger.info(f"正在加载 YOLOv8 模型: {model_path}")
+    def __init__(self, model_path: str = "yolo11n.pt", conf: float = None):
+        logger.info(f"正在加载 YOLOv11 模型: {model_path}")
         self.model = YOLO(model_path)
         # 显式使用 GPU
         import torch
         if torch.cuda.is_available():
             self.model.to('cuda')
-            logger.info("YOLOv8 已移至 GPU (CUDA)")
+            logger.info("YOLOv11 已移至 GPU (CUDA)")
         self.conf = conf if conf is not None else _env_float("CARMATE_YOLO_CONFIDENCE", 0.25)
-        logger.info(f"YOLOv8 模型加载完成 (conf={self.conf})")
+        logger.info(f"YOLOv11 模型加载完成 (conf={self.conf})")
 
     def detect(self, image: np.ndarray) -> list[dict]:
         """检测车辆，返回 bbox + 类型（car/bus/truck）"""
@@ -224,7 +224,7 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
     车牌识别完整 pipeline（性能优化版）
 
     策略：
-    1. YOLOv8 检测车辆（已在 GPU 上运行）
+    1. YOLOv11 检测车辆（已在 GPU 上运行）
     2. 对每辆车裁切区域 → 自适应放大 → HyperLPR3 检测车牌
        - 近处大车: 1.3x 放大（省时）
        - 远处小车: 2.0x 放大（保召回）
@@ -236,7 +236,7 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
     detector = get_detector()
     h, w = image.shape[:2]
 
-    # ── 1. YOLOv8 车辆检测 ──
+    # ── 1. YOLOv11 车辆检测 ──
     vehicles = detector.detect(image)
 
     if not vehicles:
