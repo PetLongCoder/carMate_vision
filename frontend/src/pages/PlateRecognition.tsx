@@ -4,7 +4,7 @@ import {
   Progress, Badge, Typography, Alert, Spin,
 } from 'antd';
 import {
-  CameraOutlined, InboxOutlined, PlayCircleOutlined,
+  InboxOutlined, PlayCircleOutlined,
   StopOutlined, LinkOutlined, VideoCameraOutlined,
   CheckCircleOutlined, CloseCircleOutlined,
   LoadingOutlined,
@@ -183,11 +183,11 @@ const PlateRecognition: React.FC = () => {
   const [trackedPlates, setTrackedPlates] = useState<TrackedPlateSummary[]>([]);
   const [trackTotalFrames, setTrackTotalFrames] = useState(0);
   const [trackProcessedFrames, setTrackProcessedFrames] = useState(0);
-  const [trackDuration, setTrackDuration] = useState(0);
+  const [, setTrackDuration] = useState(0);
   const [detectionLog, setDetectionLog] = useState<{ time: number; count: number; plateNos: string[] }[]>([]);
 
   // 按真实时间戳索引的检测结果 (WebSocket 推送时由实际 timestamp 建立)
-  const [timeIndexedDetections, setTimeIndexedDetections] = useState<Map<number, TrackedPlateResult[]>>(new Map());
+  const [, setTimeIndexedDetections] = useState<Map<number, TrackedPlateResult[]>>(new Map());
   // 有序帧数组 (按 timestamp 升序), 用于二分查找
   const detectionFramesRef = useRef<{ timestamp: number; detections: TrackedPlateResult[] }[]>([]);
 
@@ -214,7 +214,7 @@ const PlateRecognition: React.FC = () => {
   const [streamUrl, setStreamUrl] = useState('');
   const [streamName, setStreamName] = useState('');
   const [connecting, setConnecting] = useState(false);
-  const [streamImgSrc, setStreamImgSrc] = useState<string | null>(null);
+  const [, setStreamImgSrc] = useState<string | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
   const [streamRunning, setStreamRunning] = useState(false);
   const [streamPlateSummary, setStreamPlateSummary] = useState<TrackedPlateSummary[]>([]);
@@ -932,6 +932,8 @@ const PlateRecognition: React.FC = () => {
       )}
 
       {/* 视频 + 检测结果 */}
+      {trackSessionId && renderProgress()}
+
       {previewUrl && wsStatus === 'connected' && (
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {/* 视频 + Canvas 叠加 */}
@@ -1045,7 +1047,7 @@ const PlateRecognition: React.FC = () => {
       )}
 
       {!previewUrl && !trackSessionId && (
-        <Card><Empty description="上传视频开始实时车牌追踪" icon={<VideoCameraOutlined />} /></Card>
+        <Card><Empty description="上传视频开始实时车牌追踪" /></Card>
       )}
     </div>
   );

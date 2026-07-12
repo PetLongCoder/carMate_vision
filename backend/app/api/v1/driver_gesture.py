@@ -6,6 +6,8 @@ from app.core.database import get_db
 from app.models.db_models import User
 from app.models.schemas import DriverGestureResult, ControlAction
 from app.services.record_service import build_gesture_summary, log_recognition
+from app.services.alert_agent.event_collector import event_collector
+from app.services.alert_agent import AnomalyEvent, AlertLevel
 from app.utils.logger import logger
 
 router = APIRouter()
@@ -46,6 +48,13 @@ def _get_tracker():
             _tracker = LSTMGestureTracker()
         except Exception as exc:
             logger.error(f"车主手势模型加载失败: {exc}")
+            event_collector.collect(AnomalyEvent(
+                source="driver_gesture",
+                anomaly_type="driver_gesture_model_failure",
+                title="车主手势模型加载失败",
+                detail={"error": str(exc)},
+                severity_hint=AlertLevel.CRITICAL,
+            ))
             raise HTTPException(status_code=503, detail="车主手势识别模块未就绪，请稍后重试") from exc
     return _tracker
 
@@ -73,6 +82,12 @@ async def recognize_driver_gesture(
         gesture_name = "未知手势"
         gesture_id = -2
         control_action = None
+        event_collector.collect(AnomalyEvent(
+            source="driver_gesture",
+            anomaly_type="driver_gesture_low_confidence",
+            title="车主手势置信度偏低",
+            detail={"gesture_key": gesture_key, "confidence": round(confidence, 4)},
+        ))
 
     result = DriverGestureResult(
         gesture=gesture_name,

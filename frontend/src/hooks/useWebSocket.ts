@@ -40,6 +40,13 @@ export function useWebSocket() {
     ws.onopen = () => {
       retryCountRef.current = 0;
       console.log('[WebSocket] 已连接');
+      // 订阅告警推送
+      try {
+        ws.send(JSON.stringify({ type: 'subscribe', channel: 'alerts' }));
+        console.log('[WebSocket] 已订阅告警推送');
+      } catch {
+        // ignore
+      }
     };
 
     ws.onmessage = (event) => {

@@ -130,7 +130,11 @@ const DashboardGestureStats: React.FC = () => {
     setSearchParams({ mode, tab: next });
   };
 
-  const tableFilters = useMemo(() => {
+  const tableFilters = useMemo<{
+    success?: boolean;
+    startDate?: string;
+    endDate?: string;
+  }>(() => {
     const success = mode === 'success' ? true : undefined;
     if (mode === 'today') {
       return { success, ...todayRange() };

@@ -37,6 +37,8 @@ from app.models.db_models import User, VerificationCode
 from app.services.operation_log_service import log_operation
 from app.services.email_service import EmailSendError, send_verification_email
 from app.services.sms_service import send_verification_sms
+from app.services.alert_agent.event_collector import event_collector
+from app.services.alert_agent import AnomalyEvent, AlertLevel
 from app.services.user_privacy_service import (
     assign_email,
     assign_phone,
@@ -177,6 +179,13 @@ def require_current_user(user: User | None = Depends(get_current_user)) -> User:
 
 def require_admin(user: User = Depends(require_current_user)) -> User:
     if user.role != "admin":
+        event_collector.collect(AnomalyEvent(
+            source="auth",
+            anomaly_type="auth_unauthorized",
+            title="未授权访问：非管理员尝试访问管理功能",
+            detail={"username": user.username, "role": user.role},
+            severity_hint=AlertLevel.WARNING,
+        ))
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return user
 
@@ -325,6 +334,12 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
             request=request,
             detail={"method": "password"},
         )
+        event_collector.collect(AnomalyEvent(
+            source="auth",
+            anomaly_type="auth_login_failure",
+            title="登录失败：密码错误",
+            detail={"username": body.username, "method": "password"},
+        ))
         return fail("密码错误")
     if body.portal == "user" and user.role == "admin":
         log_operation(

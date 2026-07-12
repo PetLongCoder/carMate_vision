@@ -49,6 +49,28 @@ class Settings:
     WECHAT_CONFIRM_BASE_URL: str = os.getenv("WECHAT_CONFIRM_BASE_URL", "")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))
 
+    # ── AlertAgent ──
+    ALERT_AGENT_ENABLED: bool = os.getenv("ALERT_AGENT_ENABLED", "true").lower() == "true"
+    ALERT_DEDUP_WINDOW_SECONDS: int = int(os.getenv("ALERT_DEDUP_WINDOW_SECONDS", "300"))
+    ALERT_MIN_INTERVAL_SECONDS: int = int(os.getenv("ALERT_MIN_INTERVAL_SECONDS", "60"))
+
+    # ── LLM API (OpenAI 兼容接口) ──
+    LLM_ENABLED: bool = os.getenv("LLM_ENABLED", "true").lower() == "true"
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
+    LLM_API_BASE_URL: str = os.getenv("LLM_API_BASE_URL", "https://api.openai.com/v1")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "gpt-3.5-turbo")
+    LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "30"))
+    LLM_MAX_TOKENS: int = int(os.getenv("LLM_MAX_TOKENS", "500"))
+
+    # ── 通知渠道 ──
+    ALERT_NOTIFICATION_ENABLED: bool = os.getenv("ALERT_NOTIFICATION_ENABLED", "true").lower() == "true"
+    ALERT_WEBSOCKET_ENABLED: bool = os.getenv("ALERT_WEBSOCKET_ENABLED", "true").lower() == "true"
+    ALERT_FEISHU_WEBHOOK_URL: str = os.getenv(
+        "ALERT_FEISHU_WEBHOOK_URL",
+        "https://open.feishu.cn/open-apis/bot/v2/hook/f2026cea-209f-46e7-8243-44c318ddbe15",
+    )
+    ALERT_FEISHU_ENABLED: bool = os.getenv("ALERT_FEISHU_ENABLED", "true").lower() == "true"
+
     @property
     def wechat_confirm_base_url(self) -> str:
         if self.WECHAT_CONFIRM_BASE_URL:
