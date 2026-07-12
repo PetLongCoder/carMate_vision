@@ -48,6 +48,7 @@ import {
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
 import EmailInput from '../components/auth/EmailInput';
 import WechatActionModal from '../components/auth/WechatActionModal';
+import WechatDeletePanel from '../components/auth/WechatDeletePanel';
 import { useAuthStore } from '../store/authStore';
 import { emailFormRules, passwordFormRules, confirmPasswordRules, PASSWORD_HINT } from '../utils/validation';
 import { resolveLoginMethods } from '../utils/loginMethods';
@@ -227,11 +228,19 @@ const Profile: React.FC = () => {
     if (methods.includes('password')) options.push({ value: 'password', label: '账号密码' });
     if (profile.phone) options.push({ value: 'phone', label: '手机号验证码' });
     if (profile.email) options.push({ value: 'email', label: '邮箱验证码' });
+    if (profile.has_wechat) options.push({ value: 'wechat', label: '微信扫码' });
     return options;
   }, [profile]);
 
   if (!profile && loading) return <Card loading />;
   if (!profile) return <Card>无法加载用户信息</Card>;
+
+  const handleWechatDeleteSuccess = () => {
+    message.success('账号已注销');
+    setDeleteOpen(false);
+    logout();
+    navigate('/login', { replace: true });
+  };
 
   const loginMethods = resolveLoginMethods(profile);
   const methodCount = loginMethods.length;
@@ -598,16 +607,22 @@ const Profile: React.FC = () => {
             <Select options={verifyOptions} />
           </Form.Item>
           <Form.Item noStyle shouldUpdate={(prev, cur) => prev.verify_method !== cur.verify_method}>
-            {({ getFieldValue }) =>
-              getFieldValue('verify_method') === 'password' ? (
-                <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
-                  <Input.Password prefix={<LockOutlined />} />
-                </Form.Item>
-              ) : (
+            {({ getFieldValue }) => {
+              const method = getFieldValue('verify_method');
+              if (method === 'wechat') {
+                return <WechatDeletePanel onSuccess={handleWechatDeleteSuccess} />;
+              }
+              if (method === 'password') {
+                return (
+                  <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入密码' }]}>
+                    <Input.Password prefix={<LockOutlined />} />
+                  </Form.Item>
+                );
+              }
+              return (
                 <Form.Item name="code" label="验证码" rules={[{ required: true, len: 6 }]}>
                   <VerificationCodeInput
                     onSend={async () => {
-                      const method = deleteForm.getFieldValue('verify_method');
                       if (method === 'phone') {
                         await sendSecureSmsCode('delete');
                         message.success('验证码已发送（请在后端终端查看）');
@@ -618,12 +633,18 @@ const Profile: React.FC = () => {
                     }}
                   />
                 </Form.Item>
+              );
+            }}
+          </Form.Item>
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.verify_method !== cur.verify_method}>
+            {({ getFieldValue }) =>
+              getFieldValue('verify_method') === 'wechat' ? null : (
+                <Button type="primary" danger htmlType="submit" loading={actionLoading} block>
+                  确认注销
+                </Button>
               )
             }
           </Form.Item>
-          <Button type="primary" danger htmlType="submit" loading={actionLoading} block>
-            确认注销
-          </Button>
         </Form>
       </Modal>
 

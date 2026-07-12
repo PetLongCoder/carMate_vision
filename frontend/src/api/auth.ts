@@ -14,6 +14,7 @@ import type {
   VerifySmsCodeRequest,
   WechatQrcodeResponse,
   WechatPollResponse,
+  WechatPollStatus,
   WechatBindPollResponse,
   BindEmailRequest,
   BindPhoneRequest,
@@ -432,6 +433,18 @@ export async function getWechatRebindQrcode(): Promise<WechatQrcodeResponse> {
 
 export async function pollWechatRebind(state: string): Promise<WechatBindPollResponse> {
   const res = await request.get<ApiResponse<WechatBindPollResponse>>('/auth/wechat/rebind/poll', {
+    params: { state },
+  });
+  return res.data.data;
+}
+
+export async function getWechatDeleteQrcode(): Promise<WechatQrcodeResponse> {
+  const res = await request.get<ApiResponse<WechatQrcodeResponse>>('/auth/wechat/delete/qrcode');
+  return res.data.data;
+}
+
+export async function pollWechatDelete(state: string): Promise<{ status: WechatPollStatus }> {
+  const res = await request.get<ApiResponse<{ status: WechatPollStatus }>>('/auth/wechat/delete/poll', {
     params: { state },
   });
   return res.data.data;
