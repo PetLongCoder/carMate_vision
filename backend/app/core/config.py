@@ -1,18 +1,82 @@
 import os
+import shutil
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 from app.core.network import detect_lan_ip
 
-# 首次运行时自动从 .env.example 创建 .env
 _env_path = Path(__file__).parent.parent.parent / ".env"
-if not _env_path.exists():
-    _example_path = _env_path.with_name(".env.example")
-    if _example_path.exists():
-        import shutil
-        shutil.copyfile(_example_path, _env_path)
-        print(f"[setup] 已从 .env.example 自动创建 .env，请按需修改配置")
+_example_path = _env_path.with_name(".env.example")
 
+_EMAIL_ENV_KEYS = {
+    "EMAIL_PROVIDER",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USE_SSL",
+    "SMTP_USER",
+    "SMTP_PASSWORD",
+    "SMTP_FROM",
+    "DATA_ENCRYPTION_KEY",
+}
+
+
+def _parse_env_keys(text: str) -> set[str]:
+    keys: set[str] = set()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        keys.add(stripped.split("=", 1)[0].strip())
+    return keys
+
+
+def _extract_example_lines(example_text: str, keys: set[str]) -> list[str]:
+    lines: list[str] = []
+    for line in example_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            if any(key.lower() in stripped.lower() for key in keys):
+                lines.append(line)
+            continue
+        if "=" not in stripped:
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in keys:
+            lines.append(line)
+    return lines
+
+
+def _ensure_env_file() -> None:
+    """首次 clone：复制 .env.example；旧 .env 缺邮箱/SMTP 配置时自动补全。"""
+    if not _example_path.exists():
+        return
+
+    if not _env_path.exists():
+        shutil.copyfile(_example_path, _env_path)
+        print("[setup] 已从 .env.example 自动创建 backend/.env（含邮箱 SMTP 配置）")
+        return
+
+    env_text = _env_path.read_text(encoding="utf-8")
+    env_keys = _parse_env_keys(env_text)
+    missing = sorted(_EMAIL_ENV_KEYS - env_keys)
+    if not missing:
+        return
+
+    example_text = _example_path.read_text(encoding="utf-8")
+    append_lines = _extract_example_lines(example_text, set(missing))
+    if not append_lines:
+        return
+
+    with _env_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n\n# auto-merged from .env.example (email / privacy)\n")
+        handle.write("\n".join(append_lines))
+        handle.write("\n")
+
+    print(f"[setup] 已从 .env.example 补全 backend/.env 缺失项: {', '.join(missing)}")
+
+
+_ensure_env_file()
 load_dotenv(_env_path, override=True)
 
 

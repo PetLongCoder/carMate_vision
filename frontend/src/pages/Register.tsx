@@ -45,6 +45,7 @@ const Register: React.FC = () => {
       message.success(smsSentHint);
     } catch (err) {
       notifyAuthError(err, navigate);
+      throw err;
     }
   };
 
@@ -56,6 +57,7 @@ const Register: React.FC = () => {
       message.success(tip || emailSentHint);
     } catch (err) {
       notifyAuthError(err, navigate);
+      throw err;
     }
   };
 
