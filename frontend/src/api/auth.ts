@@ -161,6 +161,12 @@ function mockRegister(data: RegisterRequest): AuthResponse {
   if (data.email && !isValidEmail(data.email)) {
     throw new Error('请输入正确的邮箱格式，如 user@example.com');
   }
+  if (data.email) {
+    if (!data.email_code) {
+      throw new Error('填写邮箱时需输入邮箱验证码');
+    }
+    verifyMockCode(`email:${data.email}`, data.email_code);
+  }
 
   const newUser: MockUserRecord = {
     id: Date.now(),

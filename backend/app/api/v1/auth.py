@@ -287,6 +287,11 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     if body.email and find_user_by_email(db, body.email):
         return fail("该邮箱已注册，请前往登录", auth_error_code="ALREADY_REGISTERED")
 
+    if body.email:
+        email_code_error = verify_code(db, f"email:{body.email}", body.email_code or "")
+        if email_code_error:
+            return fail(email_code_error)
+
     user = User(
         username=body.username,
         password_hash=hash_password(body.password),
