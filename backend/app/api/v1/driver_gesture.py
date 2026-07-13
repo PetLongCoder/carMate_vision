@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Depends
 from sqlalchemy.orm import Session
 import time
+import numpy as np
 
 from app.api.v1.auth import get_current_user
 from app.core.database import get_db
@@ -25,6 +26,9 @@ _last_play_state = None          # 上一次播放状态 (True=播放, False=暂
 
 # 需要计次的手势（画圈和拇指）
 COUNT_GESTURES = {"rotate_cw", "rotate_ccw", "thumb_up", "thumb_down"}
+
+# ---- 画圈闭合性检查缓存 ----
+_hand_trajectory_cache = []      # 存储最近 30 帧的手掌中心 (x, y)
 
 GESTURE_MAP = {
     "fist": {"id": 0, "name": "握拳"},
@@ -135,6 +139,7 @@ async def recognize_driver_gesture(
     db: Session = Depends(get_db),
 ):
     global _current_gesture_key, _current_start_time, _current_count, _last_play_state
+    global _hand_trajectory_cache
 
     logger.info(f"收到车主手势识别请求: {file.filename}")
     image_bytes = await file.read()
@@ -143,13 +148,49 @@ async def recognize_driver_gesture(
 
     gesture_key, confidence, landmarks = _get_tracker().process_frame(image_bytes)
 
+    # ==========================================
+    # 画圈闭合性检查（轨迹缓存 + 判定）
+    # ==========================================
+    if landmarks and len(landmarks) == 21:
+        # 提取手掌中心（腕部 0 和中指根部 9 的平均）
+        wrist = np.array([landmarks[0][0], landmarks[0][1]])
+        middle_base = np.array([landmarks[9][0], landmarks[9][1]])
+        center = (wrist + middle_base) / 2
+        _hand_trajectory_cache.append(center)
+    else:
+        # 无手，清空缓存（打断轨迹）
+        _hand_trajectory_cache.clear()
+
+    # 保持缓存最多 30 帧
+    if len(_hand_trajectory_cache) > 30:
+        _hand_trajectory_cache.pop(0)
+
+    is_circle = False
+    if len(_hand_trajectory_cache) == 30 and gesture_key in ["rotate_cw", "rotate_ccw"]:
+        pts = np.array(_hand_trajectory_cache)
+        start = pts[0]
+        end = pts[-1]
+        dist = np.linalg.norm(end - start)
+        total_len = np.sum(np.linalg.norm(np.diff(pts, axis=0), axis=1))
+        # 闭合条件：起点终点距离 < 总路径长度的 35%
+        if total_len > 0 and dist < total_len * 0.35:
+            is_circle = True
+
+    # 如果不闭合且是画圈，强制改为 unknown
+    if gesture_key in ["rotate_cw", "rotate_ccw"] and not is_circle:
+        gesture_key = "unknown"
+        # 清空缓存避免误判
+        _hand_trajectory_cache.clear()
+
+    # ==========================================
+
     gesture_info = GESTURE_MAP.get(gesture_key, GESTURE_MAP["unknown"])
     gesture_name = gesture_info["name"]
     gesture_id = gesture_info["id"]
 
     control_action = ACTION_MAP.get(gesture_key)
 
-    if confidence < 0.3:
+    if confidence < 0.2:
         gesture_name = "未知手势"
         gesture_id = -2
         control_action = None
@@ -253,10 +294,12 @@ async def recognize_driver_gesture(
 @router.post("/driver-gesture/reset")
 async def reset_gesture_tracker():
     global _current_gesture_key, _current_start_time, _current_count, _last_play_state
+    global _hand_trajectory_cache
     _get_tracker().reset_state()
     _current_gesture_key = None
     _current_start_time = 0
     _current_count = 0
     _last_play_state = None
+    _hand_trajectory_cache.clear()
     logger.info("手势追踪器状态已重置")
     return {"code": 200, "message": "reset success", "data": None}
