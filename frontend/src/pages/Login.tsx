@@ -93,6 +93,7 @@ const Login: React.FC = () => {
       );
     } catch (err) {
       notifyAuthError(err, navigate);
+      throw err;
     }
   };
 
@@ -104,6 +105,7 @@ const Login: React.FC = () => {
       message.success(tip);
     } catch (err) {
       notifyAuthError(err, navigate);
+      throw err;
     }
   };
 
