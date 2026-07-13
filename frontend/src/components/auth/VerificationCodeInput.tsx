@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Button, Input, Space } from 'antd';
+import { Button, Input, Space, message } from 'antd';
 
 interface VerificationCodeInputProps {
   value?: string;
@@ -30,6 +30,12 @@ const VerificationCodeInput: React.FC<VerificationCodeInputProps> = ({
     try {
       await onSend();
       setSeconds(countdown);
+    } catch (err) {
+      if (err instanceof Error && err.message) {
+        message.error(err.message);
+      } else {
+        message.error('验证码发送失败，请稍后重试');
+      }
     } finally {
       setSending(false);
     }

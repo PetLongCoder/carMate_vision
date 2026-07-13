@@ -120,7 +120,7 @@ echo.
 echo   ┌─ 前端       http://localhost:5173
 echo   ├─ 后端 API   http://localhost:8000
 echo   ├─ API 文档   http://localhost:8000/docs
-echo   ├─ 邮箱验证码  真实 SMTP（backend\.env 已含全队配置）
+echo   ├─ 邮箱验证码  真实 SMTP（首次 clone 自动从 .env.example 生成，无需手配）
 echo   ├─ 短信验证码  后端终端 [SMS Code]（mock）
 echo   └─ 测试账号   admin/123456  user/123456
 if exist mediamtx\mediamtx.exe (
