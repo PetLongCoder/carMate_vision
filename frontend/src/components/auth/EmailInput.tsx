@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { AutoComplete, Input } from 'antd';
 import type { InputProps } from 'antd';
 import { MailOutlined } from '@ant-design/icons';
-import { buildEmailSuggestions } from '../../utils/validation';
+import { buildEmailSuggestions, isValidEmail } from '../../utils/validation';
 
 type EmailInputProps = Omit<InputProps, 'value' | 'onChange'> & {
   value?: string;
@@ -16,12 +16,19 @@ const EmailInput: React.FC<EmailInputProps> = ({
   size = 'large',
   ...rest
 }) => {
+  const trimmed = value.trim();
+
   const options = useMemo(() => {
     const suggestions = buildEmailSuggestions(value);
     return suggestions.map((email) => ({ value: email, label: email }));
   }, [value]);
 
-  const open = value.includes('@') && options.length > 0;
+  const open = useMemo(() => {
+    if (!trimmed.includes('@') || options.length === 0) return false;
+    if (isValidEmail(trimmed)) return false;
+    if (options.some((item) => item.value === trimmed)) return false;
+    return true;
+  }, [trimmed, options]);
 
   return (
     <AutoComplete

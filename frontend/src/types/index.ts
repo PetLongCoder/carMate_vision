@@ -366,6 +366,7 @@ export interface RegisterRequest {
   phone: string;
   code: string;
   email?: string;
+  email_code?: string;
 }
 
 export interface AuthResponse {

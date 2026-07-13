@@ -7,11 +7,12 @@ import {
   MobileOutlined,
 } from '@ant-design/icons';
 import { Link, useNavigate } from 'react-router-dom';
-import { register, sendSmsCode } from '../api/auth';
+import { register, sendSmsCode, sendEmailCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
 import EmailInput from '../components/auth/EmailInput';
-import { emailFormRules, passwordFormRules, confirmPasswordRules, PASSWORD_HINT } from '../utils/validation';
+import { emailFormRules, passwordFormRules, confirmPasswordRules } from '../utils/validation';
+import PasswordStrengthIndicator from '../components/auth/PasswordStrengthIndicator';
 import { notifyAuthError } from '../utils/notifyAuthError';
 
 const { Title, Text } = Typography;
@@ -29,12 +30,30 @@ const Register: React.FC = () => {
         : '验证码已发送（请在后端终端查看验证码）'
       : '验证码已发送';
 
+  const emailSentHint =
+    import.meta.env.DEV
+      ? import.meta.env.VITE_USE_MOCK_AUTH === 'true'
+        ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
+        : '验证码已发送（请查收邮箱或后端终端）'
+      : '验证码已发送，请查收邮箱';
+
   const handleSendSmsCode = async () => {
     try {
       const phone = form.getFieldValue('phone');
       await form.validateFields(['phone']);
       await sendSmsCode({ phone, scene: 'register' });
       message.success(smsSentHint);
+    } catch (err) {
+      notifyAuthError(err, navigate);
+    }
+  };
+
+  const handleSendEmailCode = async () => {
+    try {
+      const email = form.getFieldValue('email');
+      await form.validateFields(['email']);
+      const tip = await sendEmailCode({ email, scene: 'register' });
+      message.success(tip || emailSentHint);
     } catch (err) {
       notifyAuthError(err, navigate);
     }
@@ -47,15 +66,18 @@ const Register: React.FC = () => {
     password: string;
     confirmPassword: string;
     email?: string;
+    email_code?: string;
   }) => {
     setLoading(true);
     try {
+      const email = values.email?.trim() || undefined;
       const result = await register({
         username: values.username,
         phone: values.phone,
         code: values.code,
         password: values.password,
-        email: values.email?.trim() || undefined,
+        email,
+        email_code: email ? values.email_code : undefined,
       });
 
       setAuth(result.token, result.user);
@@ -95,7 +117,17 @@ const Register: React.FC = () => {
           <Text type="secondary">填写以下信息，一步完成注册</Text>
         </div>
 
-        <Form form={form} layout="vertical" autoComplete="off" onFinish={handleSubmit}>
+        <Form
+          form={form}
+          layout="vertical"
+          autoComplete="off"
+          onFinish={handleSubmit}
+          onValuesChange={(changed) => {
+            if ('email' in changed && !(changed.email as string | undefined)?.trim()) {
+              form.setFieldsValue({ email_code: undefined });
+            }
+          }}
+        >
           <Form.Item
             name="username"
             label="用户名"
@@ -137,22 +169,43 @@ const Register: React.FC = () => {
           <Form.Item
             name="email"
             label="邮箱（可选）"
-            extra="填写后可使用邮箱验证码登录"
+            extra="填写后需验证邮箱验证码，方可使用邮箱登录"
             rules={emailFormRules(false)}
           >
             <EmailInput placeholder="请输入邮箱" />
           </Form.Item>
 
-          <Form.Item
-            name="password"
-            label="密码"
-            extra={PASSWORD_HINT}
-            rules={passwordFormRules(true)}
-          >
-            <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" size="large" />
+          <Form.Item noStyle shouldUpdate={(prev, cur) => prev.email !== cur.email}>
+            {({ getFieldValue }) => {
+              const email = (getFieldValue('email') as string | undefined)?.trim();
+              if (!email) return null;
+              return (
+                <Form.Item
+                  name="email_code"
+                  label="邮箱验证码"
+                  rules={[
+                    { required: true, message: '请输入邮箱验证码' },
+                    { len: 6, message: '验证码为 6 位数字' },
+                  ]}
+                >
+                  <VerificationCodeInput onSend={handleSendEmailCode} />
+                </Form.Item>
+              );
+            }}
           </Form.Item>
 
-          <Form.Item
+          <Form.Item label="密码" required style={{ marginBottom: 0 }}>
+            <Form.Item name="password" rules={passwordFormRules(true)} style={{ marginBottom: 8 }}>
+              <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" size="large" />
+            </Form.Item>
+            <Form.Item noStyle shouldUpdate={(prev, cur) => prev.password !== cur.password}>
+              {({ getFieldValue }) => (
+                <PasswordStrengthIndicator password={getFieldValue('password') || ''} />
+              )}
+            </Form.Item>
+          </Form.Item>
+
+          <Form.Item style={{ marginTop: 16 }}
             name="confirmPassword"
             label="确认密码"
             dependencies={['password']}
