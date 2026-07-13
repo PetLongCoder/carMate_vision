@@ -1,7 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Request, Depends
 from sqlalchemy.orm import Session
 import time
-import numpy as np
 
 from app.api.v1.auth import get_current_user
 from app.core.database import get_db
@@ -26,9 +25,6 @@ _last_play_state = None          # 上一次播放状态 (True=播放, False=暂
 
 # 需要计次的手势（画圈和拇指）
 COUNT_GESTURES = {"rotate_cw", "rotate_ccw", "thumb_up", "thumb_down"}
-
-# ---- 画圈闭合性检查缓存 ----
-_hand_trajectory_cache = []      # 存储最近 30 帧的手掌中心 (x, y)
 
 GESTURE_MAP = {
     "fist": {"id": 0, "name": "握拳"},
@@ -77,14 +73,12 @@ def _log_gesture_segment(db, gesture_key, gesture_name, gesture_id, confidence, 
     if gesture_key in ["unknown", "no_hand"]:
         return
 
-    # 构建摘要
     summary = gesture_name
     if duration > 0 and gesture_key in COUNT_GESTURES:
         summary += f" (持续{duration:.1f}秒)"
     if count > 1 and gesture_key in COUNT_GESTURES:
         summary += f"，{count}次"
 
-    # 构建 result 数据
     result_data = {
         "gesture": gesture_name,
         "gesture_id": gesture_id,
@@ -96,7 +90,6 @@ def _log_gesture_segment(db, gesture_key, gesture_name, gesture_id, confidence, 
         result_data["duration"] = round(duration, 1)
         result_data["count"] = count
 
-    # 直接调用 log_recognition
     from app.services.record_service import log_recognition as log_rec
     log_rec(
         db,
@@ -114,7 +107,7 @@ def _log_play_state_change(db, new_state, file_name, user):
     state_name = "播放" if new_state else "暂停"
     result_data = {
         "gesture": state_name,
-        "gesture_id": -3,  # 自定义ID
+        "gesture_id": -3,
         "confidence": 1.0,
         "sourceType": "image",
         "fileName": file_name,
@@ -139,7 +132,6 @@ async def recognize_driver_gesture(
     db: Session = Depends(get_db),
 ):
     global _current_gesture_key, _current_start_time, _current_count, _last_play_state
-    global _hand_trajectory_cache
 
     logger.info(f"收到车主手势识别请求: {file.filename}")
     image_bytes = await file.read()
@@ -148,49 +140,13 @@ async def recognize_driver_gesture(
 
     gesture_key, confidence, landmarks = _get_tracker().process_frame(image_bytes)
 
-    # ==========================================
-    # 画圈闭合性检查（轨迹缓存 + 判定）
-    # ==========================================
-    if landmarks and len(landmarks) == 21:
-        # 提取手掌中心（腕部 0 和中指根部 9 的平均）
-        wrist = np.array([landmarks[0][0], landmarks[0][1]])
-        middle_base = np.array([landmarks[9][0], landmarks[9][1]])
-        center = (wrist + middle_base) / 2
-        _hand_trajectory_cache.append(center)
-    else:
-        # 无手，清空缓存（打断轨迹）
-        _hand_trajectory_cache.clear()
-
-    # 保持缓存最多 30 帧
-    if len(_hand_trajectory_cache) > 30:
-        _hand_trajectory_cache.pop(0)
-
-    is_circle = False
-    if len(_hand_trajectory_cache) == 30 and gesture_key in ["rotate_cw", "rotate_ccw"]:
-        pts = np.array(_hand_trajectory_cache)
-        start = pts[0]
-        end = pts[-1]
-        dist = np.linalg.norm(end - start)
-        total_len = np.sum(np.linalg.norm(np.diff(pts, axis=0), axis=1))
-        # 闭合条件：起点终点距离 < 总路径长度的 35%
-        if total_len > 0 and dist < total_len * 0.35:
-            is_circle = True
-
-    # 如果不闭合且是画圈，强制改为 unknown
-    if gesture_key in ["rotate_cw", "rotate_ccw"] and not is_circle:
-        gesture_key = "unknown"
-        # 清空缓存避免误判
-        _hand_trajectory_cache.clear()
-
-    # ==========================================
-
     gesture_info = GESTURE_MAP.get(gesture_key, GESTURE_MAP["unknown"])
     gesture_name = gesture_info["name"]
     gesture_id = gesture_info["id"]
 
     control_action = ACTION_MAP.get(gesture_key)
 
-    if confidence < 0.3:
+    if confidence < 0.2:
         gesture_name = "未知手势"
         gesture_id = -2
         control_action = None
@@ -218,7 +174,6 @@ async def recognize_driver_gesture(
         if _last_play_state != new_play_state:
             _last_play_state = new_play_state
             _log_play_state_change(db, new_play_state, file.filename, user)
-            # 重置片段状态（播放/暂停是瞬时切换，不积累）
             _current_gesture_key = None
             _current_start_time = 0
             _current_count = 0
@@ -227,12 +182,10 @@ async def recognize_driver_gesture(
     # 2. 处理其他手势（操作片段逻辑）
     # ----------------------------------------------------------
     else:
-        # 如果手势无效（unknown/no_hand），结束当前片段
         if gesture_key in ["unknown", "no_hand"]:
             if _current_gesture_key and _current_gesture_key not in ["unknown", "no_hand"]:
-                # 记录当前片段
                 duration = current_time - _current_start_time
-                if duration >= 0.5:  # 至少0.5秒才记录
+                if duration >= 0.5:
                     _log_gesture_segment(
                         db,
                         _current_gesture_key,
@@ -244,25 +197,18 @@ async def recognize_driver_gesture(
                         file.filename,
                         user,
                     )
-                # 重置状态
                 _current_gesture_key = None
                 _current_start_time = 0
                 _current_count = 0
-            # 返回结果（不记录日志）
         else:
-            # 有效手势
             if _current_gesture_key is None:
-                # 开始新片段
                 _current_gesture_key = gesture_key
                 _current_start_time = current_time
                 _current_count = 1
             elif gesture_key == _current_gesture_key:
-                # 相同手势，累加计数（仅对画圈和拇指）
                 if gesture_key in COUNT_GESTURES:
                     _current_count += 1
-                # 其他手势不累加
             else:
-                # 手势变化：结束旧片段，开始新片段
                 if _current_gesture_key not in ["unknown", "no_hand"]:
                     duration = current_time - _current_start_time
                     if duration >= 0.5:
@@ -277,7 +223,6 @@ async def recognize_driver_gesture(
                             file.filename,
                             user,
                         )
-                # 开始新片段
                 _current_gesture_key = gesture_key
                 _current_start_time = current_time
                 _current_count = 1
@@ -294,12 +239,10 @@ async def recognize_driver_gesture(
 @router.post("/driver-gesture/reset")
 async def reset_gesture_tracker():
     global _current_gesture_key, _current_start_time, _current_count, _last_play_state
-    global _hand_trajectory_cache
     _get_tracker().reset_state()
     _current_gesture_key = None
     _current_start_time = 0
     _current_count = 0
     _last_play_state = None
-    _hand_trajectory_cache.clear()
     logger.info("手势追踪器状态已重置")
     return {"code": 200, "message": "reset success", "data": None}
