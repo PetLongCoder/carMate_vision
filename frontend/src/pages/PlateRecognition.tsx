@@ -842,18 +842,6 @@ const PlateRecognition: React.FC = () => {
     return <Badge status={s.color as any} text={<><span style={{ marginRight: 4 }}>{s.icon}</span>{s.text}</>} />;
   };
 
-  const renderProgress = () => {
-    const pct = Math.round(trackProgress * 100);
-    return (
-      <div style={{ marginBottom: 16 }}>
-        <Progress
-          percent={pct}
-          status={trackStatusMsg === 'error' ? 'exception' : trackStatusMsg === 'completed' ? 'success' : 'active'}
-          format={() => `${trackProcessedFrames}/${trackTotalFrames} 帧`}
-        />
-      </div>
-    );
-  };
 
   // ═══════════════════════════════════════════════════════════
   //  TAB 内容
@@ -959,28 +947,16 @@ const PlateRecognition: React.FC = () => {
         </Dragger>
       </Card>
 
-      {/* 连接状态 */}
       {trackSessionId && (
         <Card size="small" style={{ marginBottom: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-            <Space>
-              <Text strong>会话:</Text>
-              <Text code>{trackSessionId}</Text>
-            </Space>
-            <Space>
-              <Text>连接状态:</Text>
-              {renderWsBadge()}
-              {wsStatus === 'connected' && (
-                <Text type="secondary" style={{ fontSize: 12 }}>已处理 {trackProcessedFrames} 帧</Text>
-              )}
-            </Space>
-          </div>
+          <Space>
+            <Text strong>会话:</Text>
+            <Text code>{trackSessionId}</Text>
+          </Space>
         </Card>
       )}
 
       {/* 视频 + 检测结果 */}
-      {trackSessionId && renderProgress()}
-
       {previewUrl && wsStatus === 'connected' && (
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {/* 视频 + Canvas 叠加 */}
