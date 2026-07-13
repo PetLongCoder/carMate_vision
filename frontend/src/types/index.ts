@@ -12,7 +12,7 @@ export interface BBox {
 export interface PlateResult {
   carId: number;
   plateNo: string;
-  vehicleType: string;  // car / bus / truck / unknown
+  vehicleType: string;  // car / motorcycle / bus / truck / unknown
   color: string;
   confidence: number;
   bbox: BBox;

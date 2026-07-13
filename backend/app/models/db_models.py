@@ -107,7 +107,7 @@ class PlateRecord(Base):
     plate_no: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     # 车牌颜色: blue/green/yellow/white/black
     color: Mapped[str | None] = mapped_column(String(10))
-    # 车辆类型: car/bus/truck/unknown
+    # 车辆类型: car/motorcycle/bus/truck/unknown
     vehicle_type: Mapped[str | None] = mapped_column(String(20))
     # 置信度 (0~1)
     confidence: Mapped[float | None] = mapped_column(Float)

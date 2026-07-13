@@ -4,7 +4,7 @@
 
 模型说明：
 - HyperLPR3 内置的检测/识别模型基于 CCPD 数据集训练，专为中国车牌优化
-- YOLOv11 使用 COCO 预训练权重，用于检测车辆（car/truck/bus）
+- YOLOv11 使用 COCO 预训练权重，用于检测车辆（car/motorcycle/bus/truck）
 
 CCPD 数据集：https://github.com/zexi-liu7/CCPD
 """
@@ -32,7 +32,7 @@ PLATE_COLOR_MAP = {
 }
 
 # ─── COCO 车辆类别 ─────────────────────────────
-VEHICLE_CLASSES = [2, 5, 7]  # car, bus, truck
+VEHICLE_CLASSES = [2, 3, 5, 7]  # car, motorcycle, bus, truck
 COCO_CLASS_NAMES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
 
@@ -131,7 +131,7 @@ class VehicleDetector:
         logger.info(f"YOLOv11 模型加载完成 (conf={self.conf})")
 
     def detect(self, image: np.ndarray) -> list[dict]:
-        """检测车辆，返回 bbox + 类型（car/bus/truck）"""
+        """检测车辆，返回 bbox + 类型（car/motorcycle/bus/truck）"""
         results = self.model(image, classes=VEHICLE_CLASSES,
                              conf=self.conf, verbose=False)
         vehicles = []

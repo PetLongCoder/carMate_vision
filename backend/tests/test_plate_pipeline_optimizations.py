@@ -5,7 +5,7 @@ import numpy as np
 
 from app.services import plate_tracker
 from app.services.plate_tracker import TrackedPlate, VideoStreamProcessor
-from app.services.plate_recognition import PlateRecognizer
+from app.services.plate_recognition import PlateRecognizer, VehicleDetector
 from app.services.session_manager import SessionStatus, SessionType, TrackingSession
 from app.services import video_processor
 
@@ -33,6 +33,46 @@ def test_default_plate_confidence_threshold_is_060(monkeypatch):
     )
 
     assert [result["plate_no"] for result in results] == ["川A60000"]
+
+
+def test_vehicle_detector_supports_motorcycles():
+    class FakeTensor:
+        def __init__(self, values):
+            self.values = np.asarray(values)
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.values
+
+    class FakeBoxes:
+        xyxy = FakeTensor([[10, 20, 110, 120]])
+        conf = FakeTensor([0.9])
+        cls = FakeTensor([3])
+
+    class FakeResult:
+        boxes = FakeBoxes()
+
+    class FakeModel:
+        def __init__(self):
+            self.classes = None
+
+        def __call__(self, _image, *, classes, conf, verbose):
+            self.classes = classes
+            assert conf == 0.25
+            assert verbose is False
+            return [FakeResult()]
+
+    detector = VehicleDetector.__new__(VehicleDetector)
+    detector.model = FakeModel()
+    detector.conf = 0.25
+
+    results = detector.detect(np.zeros((150, 150, 3), dtype=np.uint8))
+
+    assert 3 in detector.model.classes
+    assert results[0]["class_id"] == 3
+    assert results[0]["class_name"] == "motorcycle"
 
 
 def test_tracked_plate_keeps_highest_confidence_plate_number():
