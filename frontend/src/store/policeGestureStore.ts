@@ -4,9 +4,13 @@ import type { PoliceGestureResult } from '../types';
 type FrameResult = {
   frame: number;
   time: number;
+  raw_time?: number;
+  rawTime?: number;
+  display_time?: number;
   gesture: string;
   gestureId: number;
   confidence: number;
+  keypoints?: number[][];   // 14 [x,y] pairs from pose estimation
 };
 
 type Segment = {
@@ -18,6 +22,21 @@ type Segment = {
 
 type StreamRecord = PoliceGestureResult & {
   inference_ms?: number;
+  proposedGesture?: string;
+  proposedGestureId?: number;
+  proposedConfidence?: number;
+  rawGesture?: string;
+  rawGestureId?: number;
+  rawConfidence?: number;
+  singleGesture?: string;
+  singleGestureId?: number;
+  singleConfidence?: number;
+  validPose?: boolean;
+  poseQuality?: {
+    score?: number;
+    validUpperKeypoints?: number;
+    validArmKeypoints?: number;
+  };
 };
 
 interface PoliceGestureState {

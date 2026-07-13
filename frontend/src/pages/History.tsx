@@ -85,7 +85,12 @@ const platesDrawerColumns = [
     render: (v: number) => v != null ? `${(v * 100).toFixed(0)}%` : '-' },
   { title: '车辆类型', dataIndex: 'vehicleType', key: 'vehicleType', width: 100,
     render: (v: string) => {
-      const map: Record<string, string> = { car: '🚗 轿车', bus: '🚌 客车', truck: '🚛 货车' };
+      const map: Record<string, string> = {
+        car: '🚗 轿车',
+        motorcycle: '🏍️ 摩托车',
+        bus: '🚌 客车',
+        truck: '🚛 货车',
+      };
       return map[v] || v || '-';
     }},
   { title: '首次出现', dataIndex: 'firstSeen', key: 'firstSeen', width: 120,

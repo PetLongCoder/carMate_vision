@@ -41,12 +41,14 @@ class TrackingSession:
     """
 
     def __init__(self, session_id: str, session_type: SessionType,
-                 source: str, total_frames: int = 0):
+                 source: str, total_frames: int = 0,
+                 delete_source_on_cleanup: bool = False):
         self.session_id = session_id
         self.type = session_type
         self.source = source
         self.status = SessionStatus.PENDING
         self.total_frames = total_frames
+        self.delete_source_on_cleanup = delete_source_on_cleanup
         self.processed_frames = 0
         self.fps = 30.0
         self.created_at = datetime.now(timezone.utc)
@@ -61,7 +63,7 @@ class TrackingSession:
         self._frame_cond = asyncio.Condition()
 
         # 客户端消息通道 (播放驱动)
-        self._latest_sync: Optional[tuple[float, float]] = None  # (recv_time, currentTime)
+        self._latest_sync: Optional[tuple[float, float, str]] = None
         self._sync_event = asyncio.Event()
 
         # WebSocket 连接池 (同一会话可多终端订阅)
@@ -79,7 +81,7 @@ class TrackingSession:
         msg_type = msg.get("type", "")
         if msg_type in ("play", "sync", "seek"):
             current_time = msg.get("currentTime", 0)
-            self._latest_sync = (time.time(), float(current_time))
+            self._latest_sync = (time.time(), float(current_time), msg_type)
             self._sync_event.set()
         elif msg_type == "pause":
             self._latest_sync = None
@@ -165,10 +167,17 @@ class SessionManager:
         self._lock = asyncio.Lock()
 
     async def create_session(self, session_type: SessionType, source: str,
-                             total_frames: int = 0) -> TrackingSession:
+                             total_frames: int = 0,
+                             delete_source_on_cleanup: bool = False) -> TrackingSession:
         """创建新会话并返回"""
         session_id = uuid.uuid4().hex[:12]
-        session = TrackingSession(session_id, session_type, source, total_frames)
+        session = TrackingSession(
+            session_id,
+            session_type,
+            source,
+            total_frames,
+            delete_source_on_cleanup=delete_source_on_cleanup,
+        )
         async with self._lock:
             self._sessions[session_id] = session
         logger.info(f"创建会话 {session_id}: {session_type.value} | {source}")

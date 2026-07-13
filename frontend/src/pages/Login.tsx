@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { Card, Form, Input, Button, Tabs, Segmented, message, Typography, Divider } from 'antd';
-import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, MailOutlined, WechatOutlined } from '@ant-design/icons';
+import { LockOutlined, UserOutlined, CarOutlined, MobileOutlined, WechatOutlined } from '@ant-design/icons';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { login, loginByPhone, loginByEmail, sendSmsCode, sendEmailCode } from '../api/auth';
 import { useAuthStore } from '../store/authStore';
 import VerificationCodeInput from '../components/auth/VerificationCodeInput';
+import EmailInput from '../components/auth/EmailInput';
 import WechatLoginModal from '../components/auth/WechatLoginModal';
 import { emailFormRules } from '../utils/validation';
 import { notifyAuthError } from '../utils/notifyAuthError';
@@ -85,13 +86,14 @@ const Login: React.FC = () => {
       await sendSmsCode({ phone, scene: 'login' });
       message.success(
         import.meta.env.DEV
-          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
+          ? import.meta.env.VITE_USE_MOCK_AUTH === 'true'
             ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
             : '验证码已发送（请在后端终端查看验证码）'
           : '验证码已发送',
       );
     } catch (err) {
       notifyAuthError(err, navigate);
+      throw err;
     }
   };
 
@@ -99,16 +101,11 @@ const Login: React.FC = () => {
     try {
       const email = emailForm.getFieldValue('email');
       await emailForm.validateFields(['email']);
-      await sendEmailCode({ email, scene: 'login' });
-      message.success(
-        import.meta.env.DEV
-          ? import.meta.env.VITE_USE_MOCK_AUTH !== 'false'
-            ? '验证码已发送（开发环境请按 F12 在 Console 查看）'
-            : '验证码已发送（请在后端终端查看验证码）'
-          : '验证码已发送',
-      );
+      const tip = await sendEmailCode({ email, scene: 'login' });
+      message.success(tip);
     } catch (err) {
       notifyAuthError(err, navigate);
+      throw err;
     }
   };
 
@@ -232,7 +229,7 @@ const Login: React.FC = () => {
               label="邮箱"
               rules={emailFormRules(true)}
             >
-              <Input prefix={<MailOutlined />} placeholder="请输入邮箱" size="large" />
+              <EmailInput placeholder="请输入邮箱" />
             </Form.Item>
 
             <Form.Item
@@ -254,7 +251,7 @@ const Login: React.FC = () => {
           </Form>
         )}
 
-        {activeRole === 'user' && import.meta.env.VITE_USE_MOCK_AUTH === 'false' && (
+        {activeRole === 'user' && import.meta.env.VITE_USE_MOCK_AUTH !== 'true' && (
           <>
             <Divider plain style={{ margin: '8px 0 16px' }}>
               其他登录方式
@@ -288,7 +285,7 @@ const Login: React.FC = () => {
           onSuccess={finishLogin}
         />
 
-        {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH !== 'false' && (
+        {import.meta.env.DEV && import.meta.env.VITE_USE_MOCK_AUTH === 'true' && (
           <div
             style={{
               marginTop: 16,
@@ -303,7 +300,7 @@ const Login: React.FC = () => {
           >
             <div>账号密码：user/123456，admin/123456</div>
             <div>手机验证码：13800138000（Console 查看验证码）</div>
-            <div>邮箱验证码：user@example.com（Console 查看验证码）</div>
+            <div>邮箱验证码：需先在个人中心绑定真实邮箱</div>
           </div>
         )}
       </Card>

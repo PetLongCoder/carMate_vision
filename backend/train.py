@@ -1,12 +1,12 @@
 """
-步骤2: 训练 YOLOv8-cls 交警手势分类模型
+步骤2: 训练 YOLOv11-cls 交警手势分类模型
 
 使用 Ultralytics YOLO 分类模式训练 8 种交警手势识别模型。
 
 用法:
-  python train.py              # 使用默认参数训练
+  python train.py              # 使用默认参数训练 (yolo11n-cls.pt)
   python train.py --epochs 200 # 自定义训练轮数
-  python train.py --model yolo11n-cls.pt  # 使用 YOLOv11
+  python train.py --model yolov8n-cls.pt  # 使用旧版 YOLOv8
 """
 
 import argparse

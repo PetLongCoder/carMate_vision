@@ -4,7 +4,7 @@ import {
   Progress, Badge, Typography, Alert, Spin,
 } from 'antd';
 import {
-  CameraOutlined, InboxOutlined, PlayCircleOutlined,
+  InboxOutlined, PlayCircleOutlined,
   StopOutlined, LinkOutlined, VideoCameraOutlined,
   CheckCircleOutlined, CloseCircleOutlined,
   LoadingOutlined,
@@ -45,6 +45,26 @@ const PLATE_COLOR_MAP: Record<string, { label: string; color: string }> = {
   white: { label: '白牌', color: 'default' },
   black: { label: '黑牌', color: 'default' },
 };
+
+// ═══════════════════════════════════════════════════════════
+//  预定义摄像头流列表
+// ═══════════════════════════════════════════════════════════
+
+const PRESET_STREAMS: { url: string; label: string; group: string }[] = [
+  { url: 'rtsp://localhost:8554/camera',                    label: '本地推流测试',     group: '本地' },
+  { url: 'rtsp://10.126.59.120:8554/live/live1',            label: '桥面',             group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live2',            label: '停车场出口',       group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live3',            label: '行人检测',         group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live4',            label: '消防车识别',       group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live5',            label: '桥出口',           group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live6',            label: '桥入口',           group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live7',            label: '道路2',            group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live8',            label: '隧道(事故识别)',   group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live9',            label: '隧道(车辆数量)',   group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live10',           label: '道路3',            group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live11',           label: '停车场入口',       group: '沙盘' },
+  { url: 'rtsp://10.126.59.120:8554/live/live12',           label: '道路1',            group: '沙盘' },
+];
 
 function isVideoFile(file: File): boolean {
   const ext = '.' + file.name.split('.').pop()?.toLowerCase();
@@ -98,34 +118,35 @@ function drawDetectionsOnCanvas(
 
     // 边框
     ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
+    ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, h);
 
-    // 车牌号标签 (框上方)
-    const label = `${d.plateNo}`;
+    // 框上方两行标签（彩色背景，不换行）
+    const vt = VEHICLE_TYPE_MAP[d.vehicleType];
+    const infoTxt = `${vt?.icon||''} ${vt?.label||d.vehicleType} · ${PLATE_COLOR_MAP[d.color]?.label||d.color} · ${(d.confidence * 100).toFixed(0)}%`;
+    const plateTxt = `${d.plateNo}`;
+
+    ctx.font = '10px -apple-system, sans-serif';
+    const iw = ctx.measureText(infoTxt).width;
     ctx.font = 'bold 14px -apple-system, sans-serif';
-    const tw = ctx.measureText(label).width;
+    const pw = ctx.measureText(plateTxt).width;
+    const totalW = Math.max(iw, pw) + 16;
 
-    const labelY = y > 30 ? y - 8 : y + h + 8;
-    const bgH = 24;
+    const pillTop = y > 36 ? y - 36 : y + h + 8;
+    const pillH = 34;
 
-    // 标签背景
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.roundRect(x, labelY - bgH, tw + 16, bgH, 4);
+    ctx.roundRect(x, pillTop, totalW, pillH, 5);
     ctx.fill();
 
-    // 标签文字
-    ctx.fillStyle = '#fff';
-    ctx.fillText(label, x + 8, labelY - 7);
+    ctx.font = '10px -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillText(infoTxt, x + 8, pillTop + 13);
 
-    // 第二行: ID + 颜色 + 车型 + 置信度
-    const vt = VEHICLE_TYPE_MAP[d.vehicleType];
-    const info = `${d.color} · ${vt?.icon||''} ${vt?.label||d.vehicleType} · ${(d.confidence * 100).toFixed(0)}%`;
-    ctx.font = '11px -apple-system, sans-serif';
-    const infoY = y > 30 ? y - 36 : y + h + 36;
-    ctx.fillStyle = color;
-    ctx.fillText(info, x, infoY);
+    ctx.font = 'bold 14px -apple-system, sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(plateTxt, x + 8, pillTop + 30);
   }
 }
 
@@ -183,11 +204,11 @@ const PlateRecognition: React.FC = () => {
   const [trackedPlates, setTrackedPlates] = useState<TrackedPlateSummary[]>([]);
   const [trackTotalFrames, setTrackTotalFrames] = useState(0);
   const [trackProcessedFrames, setTrackProcessedFrames] = useState(0);
-  const [trackDuration, setTrackDuration] = useState(0);
+  const [, setTrackDuration] = useState(0);
   const [detectionLog, setDetectionLog] = useState<{ time: number; count: number; plateNos: string[] }[]>([]);
 
   // 按真实时间戳索引的检测结果 (WebSocket 推送时由实际 timestamp 建立)
-  const [timeIndexedDetections, setTimeIndexedDetections] = useState<Map<number, TrackedPlateResult[]>>(new Map());
+  const [, setTimeIndexedDetections] = useState<Map<number, TrackedPlateResult[]>>(new Map());
   // 有序帧数组 (按 timestamp 升序), 用于二分查找
   const detectionFramesRef = useRef<{ timestamp: number; detections: TrackedPlateResult[] }[]>([]);
 
@@ -209,12 +230,13 @@ const PlateRecognition: React.FC = () => {
   const streamCanvasRef = useRef<HTMLCanvasElement>(null);
   const streamAnimFrameRefx = useRef<number>(0);
   const lastValidStreamRef = useRef<TrackedPlateResult[]>([]);
+  const streamLastDetectTimeRef = useRef<number>(0);
 
   // ── Stream 模式状态 ──
   const [streamUrl, setStreamUrl] = useState('');
   const [streamName, setStreamName] = useState('');
   const [connecting, setConnecting] = useState(false);
-  const [streamImgSrc, setStreamImgSrc] = useState<string | null>(null);
+  const [, setStreamImgSrc] = useState<string | null>(null);
   const [streamSessionId, setStreamSessionId] = useState<string | null>(null);
   const [streamRunning, setStreamRunning] = useState(false);
   const [streamPlateSummary, setStreamPlateSummary] = useState<TrackedPlateSummary[]>([]);
@@ -507,8 +529,14 @@ const PlateRecognition: React.FC = () => {
     }
 
     const dets = streamDetectionsRef.current;
+    if (dets.length > 0) {
+      lastValidStreamRef.current = dets;
+      streamLastDetectTimeRef.current = Date.now();
+    } else if (Date.now() - streamLastDetectTimeRef.current > 1000) {
+      lastValidStreamRef.current = [];
+    }
+
     const drawTarget = dets.length > 0 ? dets : lastValidStreamRef.current;
-    if (dets.length > 0) lastValidStreamRef.current = dets;
 
     if (drawTarget.length === 0) {
       streamAnimFrameRefx.current = requestAnimationFrame(streamDrawLoop);
@@ -526,25 +554,35 @@ const PlateRecognition: React.FC = () => {
       const color = getColorForPlate(d.color);
 
       ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
+      ctx.lineWidth = 2;
       ctx.strokeRect(x, y, bw, bh);
 
-      const label = d.plateNo;
+      // 框上方两行标签（彩色背景，不换行）
+      const vt = VEHICLE_TYPE_MAP[d.vehicleType];
+      const infoTxt = `${vt?.icon||''} ${vt?.label||d.vehicleType} · ${PLATE_COLOR_MAP[d.color]?.label||d.color} · ${(d.confidence * 100).toFixed(0)}%`;
+      const plateTxt = `${d.plateNo}`;
+
+      ctx.font = '10px -apple-system, sans-serif';
+      const iw = ctx.measureText(infoTxt).width;
       ctx.font = 'bold 14px -apple-system, sans-serif';
-      const tw = ctx.measureText(label).width;
-      const labelY = y > 30 ? y - 8 : y + bh + 8;
+      const pw = ctx.measureText(plateTxt).width;
+      const totalW = Math.max(iw, pw) + 16;
+
+      const pillTop = y > 36 ? y - 36 : y + bh + 8;
+      const pillH = 34;
 
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.roundRect(x, labelY - 24, tw + 16, 24, 4);
+      ctx.roundRect(x, pillTop, totalW, pillH, 5);
       ctx.fill();
-      ctx.fillStyle = '#fff';
-      ctx.fillText(label, x + 8, labelY - 7);
 
-      const info = `${d.color} · ${(d.confidence * 100).toFixed(0)}%`;
-      ctx.font = '11px -apple-system, sans-serif';
-      ctx.fillStyle = color;
-      ctx.fillText(info, x, y > 30 ? y - 36 : y + bh + 36);
+      ctx.font = '10px -apple-system, sans-serif';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(infoTxt, x + 8, pillTop + 13);
+
+      ctx.font = 'bold 14px -apple-system, sans-serif';
+      ctx.fillStyle = '#fff';
+      ctx.fillText(plateTxt, x + 8, pillTop + 30);
     }
 
     streamAnimFrameRefx.current = requestAnimationFrame(streamDrawLoop);
@@ -604,6 +642,9 @@ const PlateRecognition: React.FC = () => {
             const det = msg as FrameDetection;
             setStreamDetections(det.detections);
             streamDetectionsRef.current = det.detections;
+            if (det.detections.length > 0) {
+              streamLastDetectTimeRef.current = Date.now();
+            }
             break;
           }
           case 'status': {
@@ -845,7 +886,9 @@ const PlateRecognition: React.FC = () => {
                   style={{ maxWidth: '100%', maxHeight: 400, borderRadius: 8 }}
                   onLoad={handleImageLoad}
                 />
-                {results.map((r) => (
+                {results.map((r) => {
+                  const bc = getColorForPlate(r.color);
+                  return (
                   <div
                     key={r.carId}
                     style={{
@@ -854,18 +897,22 @@ const PlateRecognition: React.FC = () => {
                       top: r.bbox.y * imageScale.y,
                       width: r.bbox.width * imageScale.x,
                       height: r.bbox.height * imageScale.y,
-                      border: '2px solid #1677ff', borderRadius: 4, pointerEvents: 'none',
+                      border: '2px solid ' + bc, borderRadius: 4, pointerEvents: 'none',
                     }}
                   >
-                    <span style={{
-                      position: 'absolute', top: -24, left: 0,
-                      background: '#1677ff', color: '#fff',
-                      padding: '2px 8px', borderRadius: 4, fontSize: 12, whiteSpace: 'nowrap',
+                    <div style={{
+                      position: 'absolute', top: -38, left: 0,
+                      background: bc, color: '#fff', borderRadius: 5,
+                      padding: '3px 8px', whiteSpace: 'nowrap',
                     }}>
-                      {r.plateNo} · {VEHICLE_TYPE_MAP[r.vehicleType]?.label || r.vehicleType}
-                    </span>
+                      <div style={{ fontSize: 10, lineHeight: 1.2, opacity: 0.85 }}>
+                        {VEHICLE_TYPE_MAP[r.vehicleType]?.icon||''} {VEHICLE_TYPE_MAP[r.vehicleType]?.label||r.vehicleType} · {PLATE_COLOR_MAP[r.color]?.label||r.color} · {(r.confidence * 100).toFixed(0)}%
+                      </div>
+                      <div style={{ fontSize: 13, fontWeight: 700, lineHeight: 1.3 }}>{r.plateNo}</div>
+                    </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Card>
@@ -932,6 +979,8 @@ const PlateRecognition: React.FC = () => {
       )}
 
       {/* 视频 + 检测结果 */}
+      {trackSessionId && renderProgress()}
+
       {previewUrl && wsStatus === 'connected' && (
         <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
           {/* 视频 + Canvas 叠加 */}
@@ -1045,7 +1094,7 @@ const PlateRecognition: React.FC = () => {
       )}
 
       {!previewUrl && !trackSessionId && (
-        <Card><Empty description="上传视频开始实时车牌追踪" icon={<VideoCameraOutlined />} /></Card>
+        <Card><Empty description="上传视频开始实时车牌追踪" /></Card>
       )}
     </div>
   );
@@ -1089,7 +1138,33 @@ const PlateRecognition: React.FC = () => {
         </div>
 	      </Card>
 
-	      {/* 运行状态 */}
+      {/* 预设摄像头流地址 */}
+      {!streamRunning && !connecting && (
+        <details style={{ marginBottom: 16 }}>
+          <summary style={{ cursor: 'pointer', color: '#1677ff', fontSize: 13, userSelect: 'none' }}>
+            📡 预设摄像头流地址 (13个) 点击展开
+          </summary>
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {PRESET_STREAMS.map((s, i) => (
+              <div
+                key={i}
+                onClick={() => { setStreamUrl(s.url); setStreamName(s.label); }}
+                style={{
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  padding: '5px 10px', borderRadius: 4, cursor: 'pointer',
+                  background: streamUrl === s.url ? '#e6f4ff' : '#fafafa',
+                  border: streamUrl === s.url ? '1px solid #1677ff' : '1px solid #f0f0f0',
+                }}
+              >
+                <span style={{ fontSize: 12 }}>{s.label}</span>
+                <code style={{ fontSize: 11, color: '#888' }}>{s.url}</code>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {/* 运行状态 */}
       {streamRunning && (
         <Card size="small" style={{ marginBottom: 20 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>

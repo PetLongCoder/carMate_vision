@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.api.v1.auth import build_auth_response, fail, ok, require_current_user, user_to_out
-from app.core.account_security import ensure_can_remove_method
+from app.core.account_security import ensure_can_remove_method, can_delete_account
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.network import detect_lan_ip
@@ -19,6 +19,11 @@ from app.core.security import hash_password
 from app.models.auth_schemas import AuthResponse, UserOut, WechatConfirmRequest, WechatPollResponse
 from app.models.db_models import User
 from app.services.operation_log_service import log_operation
+from app.services.user_privacy_service import (
+    assign_wechat_openid,
+    find_user_by_wechat_openid,
+    get_wechat_openid_plain,
+)
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/auth/wechat", tags=["微信登录(Mock)"])
@@ -69,6 +74,33 @@ def _make_qrcode_base64(content: str) -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+_LAN_NETWORK_HINT = (
+    "已自动检测局域网 IP，无需手动改 .env。"
+    "后端请使用 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 启动；"
+    "手机与电脑需同一 WiFi/热点，校园网扫不开可改用手机热点。"
+)
+
+
+def _build_qrcode_payload(
+    state: str,
+    confirm_url: str,
+    *,
+    network_hint: str = "",
+    step: int | None = None,
+) -> dict:
+    payload = {
+        "state": state,
+        "confirm_url": confirm_url,
+        "qrcode_base64": _make_qrcode_base64(confirm_url),
+        "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
+        "lan_ip": detect_lan_ip(),
+        "network_hint": network_hint or _LAN_NETWORK_HINT,
+    }
+    if step is not None:
+        payload["step"] = step
+    return payload
+
+
 def _generate_unique_username(db: Session, openid: str) -> str:
     suffix = openid.replace("mock_", "")[:8]
     candidate = f"wx_{suffix}"
@@ -88,7 +120,7 @@ def _resolve_or_create_user(
     mock_openid: str,
     nickname: str | None,
 ) -> User:
-    user = db.query(User).filter(User.wechat_openid == mock_openid).first()
+    user = find_user_by_wechat_openid(db, mock_openid)
     if user:
         if nickname and nickname.strip() and user.nickname != nickname.strip():
             user.nickname = nickname.strip()
@@ -100,11 +132,11 @@ def _resolve_or_create_user(
     user = User(
         username=_generate_unique_username(db, mock_openid),
         password_hash=hash_password(secrets.token_urlsafe(24)),
-        wechat_openid=mock_openid,
         nickname=display_name,
         avatar_url=MOCK_AVATAR,
         role="user",
     )
+    assign_wechat_openid(user, mock_openid)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -126,11 +158,11 @@ def _bind_wechat_to_user(
     if user.wechat_openid:
         return "您已绑定微信"
 
-    owner = db.query(User).filter(User.wechat_openid == mock_openid).first()
+    owner = find_user_by_wechat_openid(db, mock_openid)
     if owner and owner.id != user.id:
         return "该微信已被其他账号绑定"
 
-    user.wechat_openid = mock_openid
+    assign_wechat_openid(user, mock_openid)
     if not user.avatar_url:
         user.avatar_url = MOCK_AVATAR
     if nickname and nickname.strip() and not user.nickname:
@@ -153,7 +185,6 @@ def create_wechat_bind_qrcode(user: User = Depends(require_current_user)):
         seconds=settings.WECHAT_SESSION_TTL_SECONDS
     )
     confirm_url = f"{settings.wechat_confirm_base_url}/api/auth/wechat/confirm?state={state}"
-    lan_ip = detect_lan_ip()
 
     _pending_sessions[state] = WechatPendingSession(
         state=state,
@@ -163,14 +194,11 @@ def create_wechat_bind_qrcode(user: User = Depends(require_current_user)):
     )
 
     return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": lan_ip,
-            "network_hint": "扫码确认后，将把微信绑定到当前登录账号。",
-        }
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="扫码确认后，将把微信绑定到当前登录账号。",
+        )
     )
 
 
@@ -188,6 +216,49 @@ def poll_wechat_bind(state: str):
         return ok({"status": "expired", "user": None})
 
     return ok({"status": "waiting", "user": None})
+
+
+@router.get("/delete/qrcode")
+def create_wechat_delete_qrcode(user: User = Depends(require_current_user)):
+    _ensure_enabled()
+    if not user.wechat_openid:
+        return fail("您尚未绑定微信")
+    guard = can_delete_account(user)
+    if guard:
+        return fail(guard)
+
+    _cleanup_expired_sessions()
+    state = secrets.token_urlsafe(16)
+    expires_at = datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(
+        seconds=settings.WECHAT_SESSION_TTL_SECONDS
+    )
+    confirm_url = f"{settings.wechat_confirm_base_url}/api/auth/wechat/confirm?state={state}"
+    _pending_sessions[state] = WechatPendingSession(
+        state=state,
+        expires_at=expires_at,
+        mode="delete",
+        bind_user_id=user.id,
+    )
+    return ok(
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="请使用已绑定的微信扫码确认注销，操作不可恢复。",
+        )
+    )
+
+
+@router.get("/delete/poll")
+def poll_wechat_delete(state: str):
+    _ensure_enabled()
+    session = _get_session(state)
+    if not session or session.mode != "delete":
+        return ok({"status": "expired"})
+    if session.status == "confirmed":
+        return ok({"status": "confirmed"})
+    if session.status == "expired":
+        return ok({"status": "expired"})
+    return ok({"status": "waiting"})
 
 
 @router.get("/unbind/qrcode")
@@ -212,14 +283,11 @@ def create_wechat_unbind_qrcode(user: User = Depends(require_current_user)):
         bind_user_id=user.id,
     )
     return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": detect_lan_ip(),
-            "network_hint": "请使用已绑定的微信扫码确认解绑。",
-        }
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="请使用已绑定的微信扫码确认解绑。",
+        )
     )
 
 
@@ -256,15 +324,12 @@ def create_wechat_rebind_qrcode(user: User = Depends(require_current_user)):
         rebind_step=1,
     )
     return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": detect_lan_ip(),
-            "network_hint": "第一步：请使用当前绑定的微信扫码确认。",
-            "step": 1,
-        }
+        _build_qrcode_payload(
+            state,
+            confirm_url,
+            network_hint="第一步：请使用当前绑定的微信扫码确认。",
+            step=1,
+        )
     )
 
 
@@ -297,24 +362,10 @@ def create_wechat_qrcode():
         seconds=settings.WECHAT_SESSION_TTL_SECONDS
     )
     confirm_url = f"{settings.wechat_confirm_base_url}/api/auth/wechat/confirm?state={state}"
-    lan_ip = detect_lan_ip()
 
     _pending_sessions[state] = WechatPendingSession(state=state, expires_at=expires_at)
 
-    return ok(
-        {
-            "state": state,
-            "confirm_url": confirm_url,
-            "qrcode_base64": _make_qrcode_base64(confirm_url),
-            "expires_in": settings.WECHAT_SESSION_TTL_SECONDS,
-            "lan_ip": lan_ip,
-            "network_hint": (
-                "已自动检测局域网 IP，无需手动改 .env。"
-                "后端请使用 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000 启动；"
-                "手机与电脑需同一网络，校园网扫不开可改用手机热点。"
-            ),
-        }
-    )
+    return ok(_build_qrcode_payload(state, confirm_url))
 
 
 @router.get("/poll")
@@ -341,7 +392,7 @@ def get_wechat_profile(mock_openid: str, db: Session = Depends(get_db)):
     if not openid:
         return ok({"exists": False})
 
-    user = db.query(User).filter(User.wechat_openid == openid).first()
+    user = find_user_by_wechat_openid(db, openid)
     if not user:
         return ok({"exists": False})
 
@@ -385,6 +436,35 @@ def confirm_wechat_login(body: WechatConfirmRequest, request: Request, db: Sessi
 
     mock_openid = (body.mock_openid or "").strip() or f"mock_{uuid.uuid4().hex}"
 
+    if session.mode == "delete" and session.bind_user_id:
+        target = db.query(User).filter(User.id == session.bind_user_id).first()
+        if not target:
+            return fail("账号不存在")
+        guard = can_delete_account(target)
+        if guard:
+            return fail(guard)
+        if get_wechat_openid_plain(target) != mock_openid:
+            return fail("请使用已绑定的微信扫码确认注销")
+        username = target.username
+        user_id = target.id
+        user_role = target.role
+        log_operation(
+            db,
+            action="delete_account",
+            user_id=user_id,
+            username=username,
+            role=user_role,
+            success=True,
+            request=request,
+            detail={"verify_method": "wechat"},
+        )
+        db.delete(target)
+        db.commit()
+        session.status = "confirmed"
+        session.returned_openid = mock_openid
+        logger.info(f"用户微信验证注销账号: {username}")
+        return ok({"message": "账号已注销", "mock_openid": mock_openid})
+
     if session.mode == "unbind" and session.bind_user_id:
         target = db.query(User).filter(User.id == session.bind_user_id).first()
         if not target:
@@ -392,9 +472,9 @@ def confirm_wechat_login(body: WechatConfirmRequest, request: Request, db: Sessi
         guard = ensure_can_remove_method(target, "wechat")
         if guard:
             return fail(guard)
-        if target.wechat_openid != mock_openid:
+        if get_wechat_openid_plain(target) != mock_openid:
             return fail("请使用已绑定的微信身份确认解绑")
-        target.wechat_openid = None
+        assign_wechat_openid(target, None)
         db.commit()
         db.refresh(target)
         user_payload = user_to_out(target).model_dump()
@@ -411,19 +491,19 @@ def confirm_wechat_login(body: WechatConfirmRequest, request: Request, db: Sessi
             return fail("账号未绑定微信")
 
         if session.rebind_step == 1:
-            if target.wechat_openid != mock_openid:
+            if get_wechat_openid_plain(target) != mock_openid:
                 return fail("请先使用当前绑定的微信扫码确认")
             session.rebind_step = 2
             session.status = "waiting"
             session.returned_openid = mock_openid
             return ok({"message": "旧微信验证成功，请再次扫码确认新微信", "step": 2})
 
-        if mock_openid == target.wechat_openid:
+        if mock_openid == get_wechat_openid_plain(target):
             return fail("新微信不能与当前微信相同")
-        owner = db.query(User).filter(User.wechat_openid == mock_openid).first()
+        owner = find_user_by_wechat_openid(db, mock_openid)
         if owner and owner.id != target.id:
             return fail("该微信已被其他账号绑定")
-        target.wechat_openid = mock_openid
+        assign_wechat_openid(target, mock_openid)
         if not target.avatar_url:
             target.avatar_url = MOCK_AVATAR
         db.commit()
@@ -477,10 +557,15 @@ def _render_confirm_page(state: str, expired: bool = False, mode: str = "login",
     is_bind = mode == "bind"
     is_unbind = mode == "unbind"
     is_rebind = mode == "rebind"
+    is_delete = mode == "delete"
     if expired:
         title = "二维码已过期"
         action_text = "请返回电脑重新扫码"
         desc_default = "当前确认链接已失效，请回到电脑端刷新二维码。"
+    elif is_delete:
+        title = "CarMate 注销账号确认"
+        action_text = "确认注销"
+        desc_default = "确认后将永久删除您的 CarMate 账号，此操作不可恢复。"
     elif is_unbind:
         title = "CarMate 微信解绑确认"
         action_text = "确认解绑"
@@ -505,7 +590,7 @@ def _render_confirm_page(state: str, expired: bool = False, mode: str = "login",
     welcome_bind_hint = "点击下方按钮即可完成微信绑定"
     disabled = "disabled" if expired else ""
     button_style = "background:#ccc;cursor:not-allowed;" if expired else "background:#07c160;cursor:pointer;"
-    hide_nickname = is_bind or is_unbind or is_rebind or expired
+    hide_nickname = is_bind or is_unbind or is_rebind or is_delete or expired
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -617,6 +702,7 @@ def _render_confirm_page(state: str, expired: bool = False, mode: str = "login",
     const state = {state!r};
     const expired = {str(expired).lower()};
     const isBind = {str(is_bind).lower()};
+    const isDelete = {str(is_delete).lower()};
     const isUnbind = {str(is_unbind).lower()};
     const isRebind = {str(is_rebind).lower()};
     const storageKey = 'carmate_mock_wechat_openid';
@@ -628,12 +714,12 @@ def _render_confirm_page(state: str, expired: bool = False, mode: str = "login",
     let isReturningUser = false;
 
     async function initPage() {{
-      if (expired || isBind || isUnbind || isRebind) {{
+      if (expired || isBind || isUnbind || isRebind || isDelete) {{
         nicknameEl.style.display = 'none';
         if (expired) return;
       }}
 
-      if (isUnbind || (isRebind && {rebind_step} >= 2)) {{
+      if (isUnbind || isDelete || (isRebind && {rebind_step} >= 2)) {{
         return;
       }}
 
@@ -679,7 +765,7 @@ def _render_confirm_page(state: str, expired: bool = False, mode: str = "login",
             body: JSON.stringify({{
               state,
               mock_openid: localStorage.getItem(storageKey) || undefined,
-              nickname: (isBind || isUnbind || isRebind || isReturningUser) ? undefined : (nicknameEl.value.trim() || undefined),
+              nickname: (isBind || isUnbind || isRebind || isDelete || isReturningUser) ? undefined : (nicknameEl.value.trim() || undefined),
             }}),
           }});
           const result = await response.json();
@@ -689,7 +775,7 @@ def _render_confirm_page(state: str, expired: bool = False, mode: str = "login",
           if (result.data?.mock_openid) {{
             localStorage.setItem(storageKey, result.data.mock_openid);
           }}
-          const doneText = isUnbind ? '解绑成功，请回到电脑查看' : (isRebind ? '确认成功，请回到电脑查看' : (isBind ? '绑定成功，请回到电脑查看' : '确认成功，请回到电脑查看'));
+          const doneText = isDelete ? '注销成功，请回到电脑查看' : (isUnbind ? '解绑成功，请回到电脑查看' : (isRebind ? '确认成功，请回到电脑查看' : (isBind ? '绑定成功，请回到电脑查看' : '确认成功，请回到电脑查看')));
           statusEl.textContent = doneText;
           confirmBtn.textContent = '已完成';
         }} catch (error) {{

@@ -5,6 +5,7 @@
       "name": "carMate Frontend",
       "runtimeExecutable": "npx",
       "runtimeArgs": ["vite"],
+      "cwd": "frontend",
       "port": 5173
     }
   ]

@@ -35,6 +35,8 @@ from app.services.session_manager import (
     SessionType,
     session_manager,
 )
+from app.services.alert_agent.event_collector import event_collector
+from app.services.alert_agent import AnomalyEvent, AlertLevel
 from app.utils.logger import logger
 
 router = APIRouter()
@@ -68,6 +70,13 @@ async def recognize_plate(
         from app.services.plate_recognition import recognize_plates, recognize_plates_from_video
     except Exception as exc:
         logger.error(f"车牌识别模块加载失败: {exc}")
+        event_collector.collect(AnomalyEvent(
+            source="plate_recognition",
+            anomaly_type="plate_model_load_failure",
+            title="车牌识别模块加载失败",
+            detail={"error": str(exc), "filename": file.filename},
+            severity_hint=AlertLevel.CRITICAL,
+        ))
         raise HTTPException(status_code=503, detail="车牌识别模块未就绪，请稍后重试") from exc
 
     contents = await file.read()
@@ -86,6 +95,12 @@ async def recognize_plate(
         nparr = np.frombuffer(contents, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         if image is None:
+            event_collector.collect(AnomalyEvent(
+                source="plate_recognition",
+                anomaly_type="plate_frame_decode_failure",
+                title="图片解码失败",
+                detail={"filename": file.filename, "ext": ext},
+            ))
             raise HTTPException(
                 status_code=400, detail="无法解码图片, 请上传 JPG/PNG 格式"
             )
@@ -155,7 +170,10 @@ async def track_video(
 
     # 创建会话
     session = await session_manager.create_session(
-        SessionType.VIDEO, tmp_path, total_frames
+        SessionType.VIDEO,
+        tmp_path,
+        total_frames,
+        delete_source_on_cleanup=True,
     )
 
     logger.info(

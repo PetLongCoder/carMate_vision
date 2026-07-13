@@ -1,24 +1,12 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
-import AppLayout from './components/layout/AppLayout';
-import AuthGuard from './components/auth/AuthGuard';
-import RoleGuard from './components/auth/RoleGuard';
-import Dashboard from './pages/Dashboard';
-import PlateRecognition from './pages/PlateRecognition';
-import PoliceGesture from './pages/PoliceGesture';
-import DriverGesture from './pages/DriverGesture';
-import AlertCenter from './pages/AlertCenter';
-import UserOperationLogs from './pages/UserOperationLogs';
-import AdminRecognitionRecords from './pages/AdminRecognitionRecords';
-import DashboardGestureStats from './pages/DashboardGestureStats';
-import History from './pages/History';
-import Profile from './pages/Profile';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import { useWebSocket } from './hooks/useWebSocket';
 import { useAuthStore } from './store/authStore';
+
+const AuthenticatedApp = React.lazy(() => import('./AuthenticatedApp'));
 
 const theme = {
   token: {
@@ -29,38 +17,11 @@ const theme = {
   },
 };
 
-const HomePage: React.FC = () => {
-  const isAdmin = useAuthStore((s) => s.isAdmin());
-  if (isAdmin) {
-    return <Dashboard />;
-  }
-  return <Navigate to="/plate" replace />;
-};
-
-const AuthenticatedApp: React.FC = () => {
-  useWebSocket();
-  return (
-    <Routes>
-      <Route element={<AuthGuard />}>
-        <Route element={<AppLayout />}>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/plate" element={<PlateRecognition />} />
-          <Route path="/police-gesture" element={<PoliceGesture />} />
-          <Route path="/driver-gesture" element={<DriverGesture />} />
-          <Route path="/history" element={<History />} />
-          <Route path="/profile" element={<Profile />} />
-          <Route element={<RoleGuard allowedRoles={['admin']} />}>
-            <Route path="/dashboard/gestures" element={<DashboardGestureStats />} />
-            <Route path="/alerts" element={<AlertCenter />} />
-            <Route path="/admin/operation-logs" element={<UserOperationLogs />} />
-            <Route path="/admin/recognition-records" element={<AdminRecognitionRecords />} />
-          </Route>
-        </Route>
-      </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
-  );
-};
+const AppFallback: React.FC = () => (
+  <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+    <Spin size="large" />
+  </div>
+);
 
 const App: React.FC = () => {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -71,7 +32,14 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/login" element={isAuthenticated ? <Navigate to="/" replace /> : <Login />} />
           <Route path="/register" element={isAuthenticated ? <Navigate to="/" replace /> : <Register />} />
-          <Route path="/*" element={<AuthenticatedApp />} />
+          <Route
+            path="/*"
+            element={
+              <Suspense fallback={<AppFallback />}>
+                <AuthenticatedApp />
+              </Suspense>
+            }
+          />
         </Routes>
       </BrowserRouter>
     </ConfigProvider>

@@ -12,7 +12,7 @@ export interface BBox {
 export interface PlateResult {
   carId: number;
   plateNo: string;
-  vehicleType: string;  // car / bus / truck / unknown
+  vehicleType: string;  // car / motorcycle / bus / truck / unknown
   color: string;
   confidence: number;
   bbox: BBox;
@@ -164,11 +164,53 @@ export interface Alert {
   title: string;
   summary: string;
   source: string;
+  sourceLabel?: string;
+  anomalyType?: string;
+  anomalyTypeLabel?: string;
+  impactScope?: string;
+  suggestedActions?: string[];
+  notifiedChannels?: string[];
+  rawEvent?: Record<string, unknown>;
   createdAt: string;
   acknowledged: boolean;
+  acknowledgedBy?: string | null;
+  acknowledgedAt?: string | null;
 }
 
 export type AlertLevel = 'info' | 'warning' | 'critical';
+
+// ── 告警统计 ──
+
+export interface AlertStats {
+  total: number;
+  unacknowledged: number;
+  todayCount: number;
+  totalByLevel: Record<string, number>;
+  byAnomalyType: Record<string, number>;
+  dailyTrend: AlertDailyTrend[];
+  avgResponseMinutes: number;
+}
+
+export interface AlertDailyTrend {
+  date: string;
+  info: number;
+  warning: number;
+  critical: number;
+}
+
+export interface AlertAnalysis {
+  topAnomalyTypes: Array<{ type: string; label: string; count: number }>;
+  sourceDistribution: Array<{ source: string; label: string; count: number }>;
+  peakHours: Array<{ hour: number; count: number }>;
+  ackRate: number;
+  total: number;
+  acknowledged: number;
+}
+
+export interface AnomalyTypeOption {
+  value: string;
+  label: string;
+}
 
 // ============================================================
 // 历史记录
@@ -301,7 +343,7 @@ export interface EmailLoginRequest {
 
 export type CodeScene = 'login' | 'register' | 'bind' | 'rebind_new';
 export type SecureCodeScene = 'unbind' | 'rebind_old' | 'delete' | 'change_password';
-export type VerifyMethod = 'password' | 'phone' | 'email';
+export type VerifyMethod = 'password' | 'phone' | 'email' | 'wechat';
 
 export interface SendSmsCodeRequest {
   phone: string;
@@ -324,6 +366,7 @@ export interface RegisterRequest {
   phone: string;
   code: string;
   email?: string;
+  email_code?: string;
 }
 
 export interface AuthResponse {

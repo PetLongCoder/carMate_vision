@@ -1,10 +1,10 @@
 """
 车辆检测 + 车牌识别服务
-核心方案：HyperLPR3 全图车牌检测与识别（主），YOLOv8 车辆检测（辅）
+核心方案：HyperLPR3 全图车牌检测与识别（主），YOLOv11 车辆检测（辅）
 
 模型说明：
 - HyperLPR3 内置的检测/识别模型基于 CCPD 数据集训练，专为中国车牌优化
-- YOLOv8 使用 COCO 预训练权重，用于检测车辆（car/truck/bus）
+- YOLOv11 使用 COCO 预训练权重，用于检测车辆（car/motorcycle/bus/truck）
 
 CCPD 数据集：https://github.com/zexi-liu7/CCPD
 """
@@ -32,7 +32,7 @@ PLATE_COLOR_MAP = {
 }
 
 # ─── COCO 车辆类别 ─────────────────────────────
-VEHICLE_CLASSES = [2, 5, 7]  # car, bus, truck
+VEHICLE_CLASSES = [2, 3, 5, 7]  # car, motorcycle, bus, truck
 COCO_CLASS_NAMES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
 
 
@@ -78,7 +78,7 @@ class PlateRecognizer:
         except Exception as e:
             logger.warning(f"HyperLPR3 检测异常: {e}")
 
-        CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.5)
+        CONF_THRESHOLD = _env_float("CARMATE_PLATE_CONFIDENCE", 0.6)
 
         seen = {}
         for code, confidence, type_idx, box in all_results:
@@ -117,21 +117,21 @@ def _env_float(name: str, default: float) -> float:
 
 
 class VehicleDetector:
-    """YOLOv8 车辆检测器（辅助功能）"""
+    """YOLOv11 车辆检测器（辅助功能）"""
 
-    def __init__(self, model_path: str = "yolov8n.pt", conf: float = 0.5):
-        logger.info(f"正在加载 YOLOv8 模型: {model_path}")
+    def __init__(self, model_path: str = "yolo11n.pt", conf: float = None):
+        logger.info(f"正在加载 YOLOv11 模型: {model_path}")
         self.model = YOLO(model_path)
         # 显式使用 GPU
         import torch
         if torch.cuda.is_available():
             self.model.to('cuda')
-            logger.info("YOLOv8 已移至 GPU (CUDA)")
-        self.conf = conf
-        logger.info("YOLOv8 模型加载完成")
+            logger.info("YOLOv11 已移至 GPU (CUDA)")
+        self.conf = conf if conf is not None else _env_float("CARMATE_YOLO_CONFIDENCE", 0.25)
+        logger.info(f"YOLOv11 模型加载完成 (conf={self.conf})")
 
     def detect(self, image: np.ndarray) -> list[dict]:
-        """检测车辆，返回 bbox + 类型（car/bus/truck）"""
+        """检测车辆，返回 bbox + 类型（car/motorcycle/bus/truck）"""
         results = self.model(image, classes=VEHICLE_CLASSES,
                              conf=self.conf, verbose=False)
         vehicles = []
@@ -224,7 +224,7 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
     车牌识别完整 pipeline（性能优化版）
 
     策略：
-    1. YOLOv8 检测车辆（已在 GPU 上运行）
+    1. YOLOv11 检测车辆（已在 GPU 上运行）
     2. 对每辆车裁切区域 → 自适应放大 → HyperLPR3 检测车牌
        - 近处大车: 1.3x 放大（省时）
        - 远处小车: 2.0x 放大（保召回）
@@ -236,7 +236,7 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
     detector = get_detector()
     h, w = image.shape[:2]
 
-    # ── 1. YOLOv8 车辆检测 ──
+    # ── 1. YOLOv11 车辆检测 ──
     vehicles = detector.detect(image)
 
     if not vehicles:
@@ -246,6 +246,9 @@ def recognize_plates(image: np.ndarray) -> list[dict]:
             for i, p in enumerate(plates):
                 p["carId"] = i + 1
                 p["vehicleType"] = "unknown"
+                # 统一键名为驼峰式 plateNo（与车辆检测路径保持一致）
+                if "plate_no" in p and "plateNo" not in p:
+                    p["plateNo"] = p.pop("plate_no")
             return plates
         return []
 

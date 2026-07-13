@@ -155,12 +155,45 @@ class LSTMGestureTracker:
         # 6. 防抖：连续相同手势才更新输出
         if gesture_name == self.last_gesture:
             self.stable_count += 1
+        print(f"🔍 手势: {gesture_name}, 置信度: {confidence:.4f}")
+
+        # 针对特定手势调整阈值
+        if gesture_name == "rotate_ccw":
+            effective_threshold = 0.99
+        elif gesture_name == "rotate_cw":
+            effective_threshold = 0.82
+        elif gesture_name in ["swipe_left", ]:
+            effective_threshold = 0.35
+        elif gesture_name == "swipe_right":
+            effective_threshold = 0.4
         else:
-            self.stable_count = 1
-            self.last_gesture = gesture_name
+            effective_threshold = self.lstm_threshold
 
         # 7. 只有连续稳定且置信度足够才输出
         if self.stable_count >= self.stable_threshold and confidence > effective_threshold:
             return gesture_name, confidence, landmarks_pixel
         else:
+        # ==========================================
+        # 关键修复：先检查置信度是否达标
+        # ==========================================
+            is_confident = confidence > effective_threshold
+
+        # 只有置信度达标时，才更新防抖状态
+        if is_confident:
+            if gesture_name == self.last_gesture:
+                self.stable_count += 1
+            else:
+                self.stable_count = 1
+                self.last_gesture = gesture_name
+        else:
+            # 低置信度：重置稳定计数（防止低置信度累积导致误输出）
+            self.stable_count = 0
+            # 不更新 last_gesture，保持上一个有效手势
+
+        # 6. 输出判断
+        if is_confident and self.stable_count >= self.stable_threshold:
+            return gesture_name, confidence, landmarks_pixel
+        else:
+            # 低置信度或未稳定：返回上一个有效手势（但置信度用当前帧的，作为参考）
+            # 如果上一个有效手势是 unknown，则返回 unknown
             return self.last_gesture, confidence, landmarks_pixel

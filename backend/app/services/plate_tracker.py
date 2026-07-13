@@ -68,6 +68,7 @@ class TrackedPlate:
         self.color = detection["color"]
         self.vehicle_type = detection.get("vehicleType", "unknown")
         self.confidence = detection["confidence"]
+        self.best_confidence = detection["confidence"]
         self.bbox = detection["bbox"].copy()
 
         self.first_seen = timestamp
@@ -94,9 +95,12 @@ class TrackedPlate:
         self.confidence = round(self.confidence_sum / self.appearances, 4)
         self.bbox = detection["bbox"].copy()
 
-        # 若新检测置信度高于历史最佳, 更新车牌号 (防抖动)
-        if detection["confidence"] > self.confidence:
+        # 最佳单帧结果决定车牌文本；平均置信度只衡量整条轨迹稳定性。
+        if detection["confidence"] > self.best_confidence:
+            self.best_confidence = detection["confidence"]
             self.plate_no = detection["plateNo"]
+            self.color = detection["color"]
+            self.vehicle_type = detection.get("vehicleType", self.vehicle_type)
 
         self.history.append({
             "frame": frame_number,
@@ -282,11 +286,11 @@ class VideoStreamProcessor:
 
     参数:
         tracker:                PlateTracker 实例 (默认新建)
-        process_every_n_frames: 每 N 帧处理一次 (默认 3, 即跳过中间帧)
+        process_every_n_frames: 每 N 帧处理一次 (默认 1, 采样由上层统一控制)
     """
 
     def __init__(self, tracker: Optional[PlateTracker] = None,
-                 process_every_n_frames: int = 3):
+                 process_every_n_frames: int = 1):
         self.tracker = tracker or PlateTracker()
         self.process_every_n_frames = max(1, process_every_n_frames)
         self._frame_count = 0
@@ -356,25 +360,29 @@ class VideoStreamProcessor:
             # ── 绘制矩形框 ──
             cv2.rectangle(annotated, (x1, y1), (x2, y2), box_color, 2)
 
-            # ── 车牌号码标签 (框上方, 若空间不够则放框内) ──
-            plate_text = f"{r['plateNo']}"
-            color_text = r["color"]
+            # ── 框上方两行标签（彩色背景，不换行） ──
+            # 第一行：车型 · 颜色 · 置信度（小）
+            # 第二行：车牌号码（大）
+            vt = r.get('vehicleType', 'unknown')
+            line1 = f"{vt} · {r['color']} · {r.get('confidence', 0):.0%}"
+            line2 = f"{r['plateNo']}"
 
-            (tw, th), _ = cv2.getTextSize(plate_text, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
-            label_bg_top = y1 - th - 8 if y1 > th + 8 else y1
-            label_bg_bottom = label_bg_top + th + 6
+            (w1, h1), _ = cv2.getTextSize(line1, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+            (w2, h2), _ = cv2.getTextSize(line2, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+            total_w = max(w1, w2) + 16
+            pad = 4
+            total_h = pad + h1 + 2 + h2 + pad  # ≈36
 
-            # 背景
-            cv2.rectangle(annotated, (x1, label_bg_top),
-                          (x1 + tw + 8, label_bg_bottom), box_color, -1)
-            # 文字
-            cv2.putText(annotated, plate_text, (x1 + 4, label_bg_bottom - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-
-            # ── 第二行: 颜色 + 置信度 (框下方) ──
-            info_text = f"#{r['trackId']} {color_text} {r.get('confidence', 0):.0%}"
-            cv2.putText(annotated, info_text, (x1, y2 + 18),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, box_color, 1)
+            # 标签位于框上方（空间不足则放框下方）
+            pill_top = y1 - total_h - 4 if y1 > total_h + 4 else y2 + 4
+            cv2.rectangle(annotated, (x1, pill_top),
+                          (x1 + total_w, pill_top + total_h), box_color, -1)
+            # 第一行：信息（浅白小字）
+            cv2.putText(annotated, line1, (x1 + 8, pill_top + pad + h1),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (220, 220, 220), 1)
+            # 第二行：车牌号码（白字大号）
+            cv2.putText(annotated, line2, (x1 + 8, pill_top + pad + h1 + 2 + pad + h2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
 
             # ── 左上角帧信息 ──
             cv2.putText(annotated, f"Frame {r.get('_frame', '')}", (8, 22),

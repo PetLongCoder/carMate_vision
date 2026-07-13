@@ -14,6 +14,7 @@ import type {
   VerifySmsCodeRequest,
   WechatQrcodeResponse,
   WechatPollResponse,
+  WechatPollStatus,
   WechatBindPollResponse,
   BindEmailRequest,
   BindPhoneRequest,
@@ -26,7 +27,7 @@ import type {
   UpdateProfileRequest,
 } from '../types';
 
-const USE_MOCK = import.meta.env.VITE_USE_MOCK_AUTH !== 'false';
+const USE_MOCK = import.meta.env.VITE_USE_MOCK_AUTH === 'true';
 
 const MOCK_USERS_KEY = 'carmate_mock_users';
 const MOCK_CODES_KEY = 'carmate_mock_codes';
@@ -160,6 +161,12 @@ function mockRegister(data: RegisterRequest): AuthResponse {
   if (data.email && !isValidEmail(data.email)) {
     throw new Error('请输入正确的邮箱格式，如 user@example.com');
   }
+  if (data.email) {
+    if (!data.email_code) {
+      throw new Error('填写邮箱时需输入邮箱验证码');
+    }
+    verifyMockCode(`email:${data.email}`, data.email_code);
+  }
 
   const newUser: MockUserRecord = {
     id: Date.now(),
@@ -291,17 +298,18 @@ export async function verifySmsCode(data: VerifySmsCodeRequest): Promise<void> {
   await request.post<ApiResponse<null>>('/auth/sms/verify', data);
 }
 
-export async function sendEmailCode(data: SendEmailCodeRequest): Promise<void> {
+export async function sendEmailCode(data: SendEmailCodeRequest): Promise<string> {
   if (USE_MOCK) {
     await new Promise((r) => setTimeout(r, 400));
     const code = mockSendEmailCode(data);
     if (import.meta.env.DEV) {
       console.info(`[Mock Email] ${data.email} 验证码: ${code}`);
     }
-    return;
+    return '验证码已发送（开发环境请按 F12 在 Console 查看）';
   }
 
-  await request.post<ApiResponse<null>>('/auth/email/send', data);
+  const res = await request.post<ApiResponse<null>>('/auth/email/send', data);
+  return res.data.message || '验证码已发送';
 }
 
 export async function loginByPhone(data: PhoneLoginRequest): Promise<AuthResponse> {
@@ -378,8 +386,9 @@ export async function sendSecureSmsCode(scene: SecureCodeScene): Promise<void> {
   await request.post<ApiResponse<null>>('/auth/account/sms/send', { scene });
 }
 
-export async function sendSecureEmailCode(scene: SecureCodeScene): Promise<void> {
-  await request.post<ApiResponse<null>>('/auth/account/email/send', { scene });
+export async function sendSecureEmailCode(scene: SecureCodeScene): Promise<string> {
+  const res = await request.post<ApiResponse<null>>('/auth/account/email/send', { scene });
+  return res.data.message || '验证码已发送';
 }
 
 export async function unbindPhone(data: UnbindCodeRequest): Promise<User> {
@@ -430,6 +439,18 @@ export async function getWechatRebindQrcode(): Promise<WechatQrcodeResponse> {
 
 export async function pollWechatRebind(state: string): Promise<WechatBindPollResponse> {
   const res = await request.get<ApiResponse<WechatBindPollResponse>>('/auth/wechat/rebind/poll', {
+    params: { state },
+  });
+  return res.data.data;
+}
+
+export async function getWechatDeleteQrcode(): Promise<WechatQrcodeResponse> {
+  const res = await request.get<ApiResponse<WechatQrcodeResponse>>('/auth/wechat/delete/qrcode');
+  return res.data.data;
+}
+
+export async function pollWechatDelete(state: string): Promise<{ status: WechatPollStatus }> {
+  const res = await request.get<ApiResponse<{ status: WechatPollStatus }>>('/auth/wechat/delete/poll', {
     params: { state },
   });
   return res.data.data;

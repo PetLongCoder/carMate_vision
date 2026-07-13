@@ -35,6 +35,20 @@ from app.models.auth_schemas import (
 )
 from app.models.db_models import User, VerificationCode
 from app.services.operation_log_service import log_operation
+from app.services.email_service import EmailSendError, send_verification_email
+from app.services.sms_service import send_verification_sms
+from app.services.alert_agent.event_collector import event_collector
+from app.services.alert_agent import AnomalyEvent, AlertLevel
+from app.services.user_privacy_service import (
+    assign_email,
+    assign_phone,
+    find_user_by_email,
+    find_user_by_phone,
+    get_email_plain,
+    get_phone_plain,
+    masked_email,
+    masked_phone,
+)
 from app.utils.logger import logger
 
 router = APIRouter(prefix="/auth", tags=["用户认证"])
@@ -59,8 +73,8 @@ def user_to_out(user: User) -> UserOut:
         id=user.id,
         username=user.username,
         role=user.role,
-        phone=user.phone,
-        email=user.email,
+        phone=masked_phone(user),
+        email=masked_email(user),
         nickname=user.nickname,
         avatar_url=user.avatar_url,
         has_wechat=bool(user.wechat_openid),
@@ -75,6 +89,24 @@ def build_auth_response(user: User) -> AuthResponse:
 
 def generate_code() -> str:
     return f"{random.randint(100000, 999999)}"
+
+
+def dispatch_sms_code(db: Session, phone: str, scene: str) -> None:
+    """生成、入库并在终端输出短信验证码（mock）。"""
+    code = generate_code()
+    save_code(db, f"phone:{phone}", scene, code)
+    send_verification_sms(phone, code, scene)
+
+
+def dispatch_email_code(db: Session, email: str, scene: str) -> tuple[str | None, dict | None]:
+    """生成、入库并发送邮箱验证码。成功返回 (message, None)，失败返回 (None, fail_response)。"""
+    code = generate_code()
+    save_code(db, f"email:{email}", scene, code)
+    try:
+        message = send_verification_email(email, code, scene)
+    except EmailSendError as exc:
+        return None, fail(str(exc))
+    return message, None
 
 
 def save_code(db: Session, target: str, scene: str, code: str) -> None:
@@ -147,6 +179,13 @@ def require_current_user(user: User | None = Depends(get_current_user)) -> User:
 
 def require_admin(user: User = Depends(require_current_user)) -> User:
     if user.role != "admin":
+        event_collector.collect(AnomalyEvent(
+            source="auth",
+            anomaly_type="auth_unauthorized",
+            title="未授权访问：非管理员尝试访问管理功能",
+            detail={"username": user.username, "role": user.role},
+            severity_hint=AlertLevel.WARNING,
+        ))
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return user
 
@@ -157,14 +196,12 @@ def seed_default_users(db: Session) -> None:
             "username": "admin",
             "password": "123456",
             "phone": "13900139000",
-            "email": "admin@example.com",
             "role": "admin",
         },
         {
             "username": "user",
             "password": "123456",
             "phone": "13800138000",
-            "email": "user@example.com",
             "role": "user",
         },
     ]
@@ -172,21 +209,19 @@ def seed_default_users(db: Session) -> None:
         exists = db.query(User).filter(User.username == item["username"]).first()
         if exists:
             continue
-        db.add(
-            User(
-                username=item["username"],
-                password_hash=hash_password(item["password"]),
-                phone=item["phone"],
-                email=item["email"],
-                role=item["role"],
-            )
+        user = User(
+            username=item["username"],
+            password_hash=hash_password(item["password"]),
+            role=item["role"],
         )
+        assign_phone(user, item["phone"])
+        db.add(user)
     db.commit()
 
 
 @router.post("/sms/send")
 def send_sms_code(body: SendSmsCodeRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.phone == body.phone).first()
+    user = find_user_by_phone(db, body.phone)
 
     if body.scene == "login" and not user:
         return fail("该手机号未注册，请先注册", auth_error_code="NOT_REGISTERED")
@@ -200,9 +235,7 @@ def send_sms_code(body: SendSmsCodeRequest, db: Session = Depends(get_db)):
     if body.scene == "rebind_new" and user:
         return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    code = generate_code()
-    save_code(db, f"phone:{body.phone}", body.scene, code)
-    logger.info(f"[SMS Code] {body.phone} scene={body.scene} code={code}")
+    dispatch_sms_code(db, body.phone, body.scene)
     return ok(message="验证码已发送")
 
 
@@ -216,7 +249,7 @@ def verify_sms_code(body: VerifySmsCodeRequest, db: Session = Depends(get_db)):
 
 @router.post("/email/send")
 def send_email_code(body: SendEmailCodeRequest, db: Session = Depends(get_db)):
-    user = db.query(User).filter(User.email == body.email).first()
+    user = find_user_by_email(db, body.email)
 
     if body.scene == "login" and not user:
         return fail("该邮箱未注册，请先注册", auth_error_code="NOT_REGISTERED")
@@ -230,10 +263,10 @@ def send_email_code(body: SendEmailCodeRequest, db: Session = Depends(get_db)):
     if body.scene == "rebind_new" and user:
         return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    code = generate_code()
-    save_code(db, f"email:{body.email}", body.scene, code)
-    logger.info(f"[Email Code] {body.email} scene={body.scene} code={code}")
-    return ok(message="验证码已发送")
+    message, error = dispatch_email_code(db, body.email, body.scene)
+    if error:
+        return error
+    return ok(message=message or "验证码已发送")
 
 
 @router.post("/register")
@@ -248,19 +281,25 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
     if db.query(User).filter(User.username == body.username).first():
         return fail("该用户名已注册，请前往登录", auth_error_code="ALREADY_REGISTERED")
 
-    if db.query(User).filter(User.phone == body.phone).first():
+    if find_user_by_phone(db, body.phone):
         return fail("该手机号已注册，请前往登录", auth_error_code="ALREADY_REGISTERED")
 
-    if body.email and db.query(User).filter(User.email == body.email).first():
+    if body.email and find_user_by_email(db, body.email):
         return fail("该邮箱已注册，请前往登录", auth_error_code="ALREADY_REGISTERED")
+
+    if body.email:
+        email_code_error = verify_code(db, f"email:{body.email}", body.email_code or "")
+        if email_code_error:
+            return fail(email_code_error)
 
     user = User(
         username=body.username,
         password_hash=hash_password(body.password),
-        phone=body.phone,
-        email=body.email,
         role="user",
     )
+    assign_phone(user, body.phone)
+    if body.email:
+        assign_email(user, body.email)
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -300,6 +339,12 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
             request=request,
             detail={"method": "password"},
         )
+        event_collector.collect(AnomalyEvent(
+            source="auth",
+            anomaly_type="auth_login_failure",
+            title="登录失败：密码错误",
+            detail={"username": body.username, "method": "password"},
+        ))
         return fail("密码错误")
     if body.portal == "user" and user.role == "admin":
         log_operation(
@@ -340,7 +385,7 @@ def login_by_phone(body: PhoneLoginRequest, request: Request, db: Session = Depe
     if code_error:
         return fail(code_error)
 
-    user = db.query(User).filter(User.phone == body.phone).first()
+    user = find_user_by_phone(db, body.phone)
     if not user:
         return fail("该手机号未注册，请先注册", auth_error_code="NOT_REGISTERED")
     if user.role == "admin":
@@ -362,7 +407,7 @@ def login_by_email(body: EmailLoginRequest, request: Request, db: Session = Depe
     if code_error:
         return fail(code_error)
 
-    user = db.query(User).filter(User.email == body.email).first()
+    user = find_user_by_email(db, body.email)
     if not user:
         return fail("该邮箱未注册，请先注册", auth_error_code="NOT_REGISTERED")
     if user.role == "admin":
@@ -406,6 +451,9 @@ def update_profile(
         detail={"old_nickname": old_nickname, "new_nickname": user.nickname},
     )
     return ok(user_to_out(user).model_dump())
+
+
+@router.post("/bind/phone")
 def bind_phone(
     body: BindPhoneRequest,
     request: Request,
@@ -419,10 +467,11 @@ def bind_phone(
     if code_error:
         return fail(code_error)
 
-    if db.query(User).filter(User.phone == body.phone, User.id != user.id).first():
+    owner = find_user_by_phone(db, body.phone)
+    if owner and owner.id != user.id:
         return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    user.phone = body.phone
+    assign_phone(user, body.phone)
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 绑定手机号: {body.phone}")
@@ -444,10 +493,11 @@ def bind_email(
     if code_error:
         return fail(code_error)
 
-    if db.query(User).filter(User.email == body.email, User.id != user.id).first():
+    owner = find_user_by_email(db, body.email)
+    if owner and owner.id != user.id:
         return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    user.email = body.email
+    assign_email(user, body.email)
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 绑定邮箱: {body.email}")
@@ -461,7 +511,8 @@ def send_secure_sms_code(
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
-    if not user.phone:
+    phone = get_phone_plain(user)
+    if not phone:
         return fail("您尚未绑定手机号")
 
     if body.scene == "unbind":
@@ -469,9 +520,7 @@ def send_secure_sms_code(
         if guard:
             return fail(guard)
 
-    code = generate_code()
-    save_code(db, f"phone:{user.phone}", body.scene, code)
-    logger.info(f"[SMS Code] {user.phone} scene={body.scene} code={code}")
+    dispatch_sms_code(db, phone, body.scene)
     return ok(message="验证码已发送")
 
 
@@ -481,7 +530,8 @@ def send_secure_email_code(
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
-    if not user.email:
+    email = get_email_plain(user)
+    if not email:
         return fail("您尚未绑定邮箱")
 
     if body.scene == "unbind":
@@ -489,10 +539,10 @@ def send_secure_email_code(
         if guard:
             return fail(guard)
 
-    code = generate_code()
-    save_code(db, f"email:{user.email}", body.scene, code)
-    logger.info(f"[Email Code] {user.email} scene={body.scene} code={code}")
-    return ok(message="验证码已发送")
+    message, error = dispatch_email_code(db, email, body.scene)
+    if error:
+        return error
+    return ok(message=message or "验证码已发送")
 
 
 @router.post("/unbind/phone")
@@ -506,11 +556,15 @@ def unbind_phone(
     if guard:
         return fail(guard)
 
-    code_error = verify_code(db, f"phone:{user.phone}", body.code)
+    phone = get_phone_plain(user)
+    if not phone:
+        return fail("您尚未绑定手机号")
+
+    code_error = verify_code(db, f"phone:{phone}", body.code)
     if code_error:
         return fail(code_error)
 
-    user.phone = None
+    assign_phone(user, None)
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 解绑手机号")
@@ -529,11 +583,15 @@ def unbind_email(
     if guard:
         return fail(guard)
 
-    code_error = verify_code(db, f"email:{user.email}", body.code)
+    email = get_email_plain(user)
+    if not email:
+        return fail("您尚未绑定邮箱")
+
+    code_error = verify_code(db, f"email:{email}", body.code)
     if code_error:
         return fail(code_error)
 
-    user.email = None
+    assign_email(user, None)
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 解绑邮箱")
@@ -548,10 +606,11 @@ def rebind_phone(
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
-    if not user.phone:
+    phone = get_phone_plain(user)
+    if not phone:
         return fail("您尚未绑定手机号，请使用绑定功能")
 
-    code_error = verify_code(db, f"phone:{user.phone}", body.old_code)
+    code_error = verify_code(db, f"phone:{phone}", body.old_code)
     if code_error:
         return fail(f"原手机号验证失败：{code_error}")
 
@@ -559,10 +618,11 @@ def rebind_phone(
     if new_code_error:
         return fail(f"新手机号验证失败：{new_code_error}")
 
-    if db.query(User).filter(User.phone == body.new_phone, User.id != user.id).first():
+    owner = find_user_by_phone(db, body.new_phone)
+    if owner and owner.id != user.id:
         return fail("该手机号已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    user.phone = body.new_phone
+    assign_phone(user, body.new_phone)
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 换绑手机号: {body.new_phone}")
@@ -584,10 +644,11 @@ def rebind_email(
     user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
-    if not user.email:
+    email = get_email_plain(user)
+    if not email:
         return fail("您尚未绑定邮箱，请使用绑定功能")
 
-    code_error = verify_code(db, f"email:{user.email}", body.old_code)
+    code_error = verify_code(db, f"email:{email}", body.old_code)
     if code_error:
         return fail(f"原邮箱验证失败：{code_error}")
 
@@ -595,10 +656,11 @@ def rebind_email(
     if new_code_error:
         return fail(f"新邮箱验证失败：{new_code_error}")
 
-    if db.query(User).filter(User.email == body.new_email, User.id != user.id).first():
+    owner = find_user_by_email(db, body.new_email)
+    if owner and owner.id != user.id:
         return fail("该邮箱已被其他账号绑定", auth_error_code="ALREADY_REGISTERED")
 
-    user.email = body.new_email
+    assign_email(user, body.new_email)
     db.commit()
     db.refresh(user)
     logger.info(f"用户 {user.username} 换绑邮箱: {body.new_email}")
@@ -628,19 +690,21 @@ def change_password(
         if not body.old_password or not verify_password(body.old_password, user.password_hash):
             return fail("原密码错误")
     elif body.verify_method == "phone":
-        if not user.phone:
+        phone = get_phone_plain(user)
+        if not phone:
             return fail("您尚未绑定手机号")
         if not body.code:
             return fail("请输入验证码")
-        code_error = verify_code(db, f"phone:{user.phone}", body.code)
+        code_error = verify_code(db, f"phone:{phone}", body.code)
         if code_error:
             return fail(code_error)
     elif body.verify_method == "email":
-        if not user.email:
+        email = get_email_plain(user)
+        if not email:
             return fail("您尚未绑定邮箱")
         if not body.code:
             return fail("请输入验证码")
-        code_error = verify_code(db, f"email:{user.email}", body.code)
+        code_error = verify_code(db, f"email:{email}", body.code)
         if code_error:
             return fail(code_error)
     else:
@@ -680,19 +744,21 @@ def delete_account(
         if not body.password or not verify_password(body.password, user.password_hash):
             return fail("密码验证失败")
     elif body.verify_method == "phone":
-        if not user.phone:
+        phone = get_phone_plain(user)
+        if not phone:
             return fail("您尚未绑定手机号")
         if not body.code:
             return fail("请输入验证码")
-        code_error = verify_code(db, f"phone:{user.phone}", body.code)
+        code_error = verify_code(db, f"phone:{phone}", body.code)
         if code_error:
             return fail(code_error)
     elif body.verify_method == "email":
-        if not user.email:
+        email = get_email_plain(user)
+        if not email:
             return fail("您尚未绑定邮箱")
         if not body.code:
             return fail("请输入验证码")
-        code_error = verify_code(db, f"email:{user.email}", body.code)
+        code_error = verify_code(db, f"email:{email}", body.code)
         if code_error:
             return fail(code_error)
     else:

@@ -22,6 +22,10 @@ def build_plate_summary(plates: list[dict[str, Any]]) -> str:
 
 
 def build_gesture_summary(data: dict[str, Any]) -> str:
+    segment_gestures = _extract_segment_gesture_names(data.get("segments"))
+    if segment_gestures:
+        return "、".join(segment_gestures)
+
     gesture = data.get("gesture") or data.get("gesture_name")
     if gesture:
         conf = data.get("confidence")
@@ -29,6 +33,28 @@ def build_gesture_summary(data: dict[str, Any]) -> str:
             return f"{gesture} ({float(conf) * 100:.0f}%)"
         return str(gesture)
     return "未识别"
+
+
+def _extract_segment_gesture_names(segments: Any) -> list[str]:
+    if not isinstance(segments, list):
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for segment in segments:
+        if not isinstance(segment, dict):
+            continue
+        gesture_id = segment.get("gestureId")
+        if gesture_id == 0:
+            continue
+        gesture = segment.get("gesture") or segment.get("gesture_name")
+        if not gesture:
+            continue
+        name = str(gesture)
+        if name not in seen:
+            names.append(name)
+            seen.add(name)
+    return names
 
 
 def extract_confidence(result: dict[str, Any]) -> float | None:
@@ -185,6 +211,8 @@ def history_record_to_dict(
         plates = result.get("plates")
         if isinstance(plates, list):
             summary = build_plate_summary(plates)
+    if not summary and record.type in {"police_gesture", "driver_gesture"}:
+        summary = build_gesture_summary(result)
     if not summary:
         summary = result.get("gesture") or result.get("plateNo")
 

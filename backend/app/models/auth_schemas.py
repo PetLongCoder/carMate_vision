@@ -1,6 +1,8 @@
 from typing import Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+
+from app.utils.password_validation import validate_password_strength
 
 SmsScene = Literal[
     "login",
@@ -32,10 +34,16 @@ class LoginRequest(BaseModel):
 
 class RegisterRequest(BaseModel):
     username: str = Field(min_length=2, max_length=50)
-    password: str = Field(min_length=6, max_length=128)
+    password: str = Field(min_length=8, max_length=128)
     phone: str = Field(pattern=r"^1[3-9]\d{9}$")
     code: str = Field(min_length=6, max_length=6)
     email: Optional[EmailStr] = None
+    email_code: Optional[str] = Field(default=None, min_length=6, max_length=6)
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
     @field_validator("email", mode="before")
     @classmethod
@@ -43,6 +51,21 @@ class RegisterRequest(BaseModel):
         if value is None or (isinstance(value, str) and not value.strip()):
             return None
         return value
+
+    @field_validator("email_code", mode="before")
+    @classmethod
+    def empty_email_code_to_none(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def require_email_code_with_email(self) -> "RegisterRequest":
+        if self.email and not self.email_code:
+            raise ValueError("填写邮箱时需输入邮箱验证码")
+        if not self.email:
+            self.email_code = None
+        return self
 
 class PhoneLoginRequest(BaseModel):
     phone: str = Field(pattern=r"^1[3-9]\d{9}$")
@@ -113,7 +136,12 @@ class ChangePasswordRequest(BaseModel):
     verify_method: ChangePasswordVerifyMethod
     old_password: Optional[str] = None
     code: Optional[str] = Field(default=None, min_length=6, max_length=6)
-    new_password: str = Field(min_length=6, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, value: str) -> str:
+        return validate_password_strength(value)
 
 
 class UpdateProfileRequest(BaseModel):
