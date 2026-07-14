@@ -53,6 +53,28 @@ POLICE_ONLY_CONF = _env_float("CARMATE_POLICE_ONLY_DETECT_CONF", 0.60)
 POLICE_ONLY_CANDIDATE_CONF = _env_float("CARMATE_POLICE_ONLY_CANDIDATE_CONF", 0.05)
 POLICE_ONLY_POSITIVE_MARGIN = _env_float("CARMATE_POLICE_ONLY_POSITIVE_MARGIN", 0.20)
 POLICE_ONLY_IMGSZ = _env_int("CARMATE_POLICE_ONLY_DETECT_IMGSZ", 640)
+POLICE_ONLY_DEVICE_MODE = os.getenv(
+    "CARMATE_POLICE_ONLY_DETECT_DEVICE",
+    os.getenv("CARMATE_DEVICE", "auto"),
+).lower()
+if POLICE_ONLY_DEVICE_MODE not in {"auto", "cpu", "cuda"}:
+    POLICE_ONLY_DEVICE_MODE = "auto"
+
+
+def _resolve_detect_device() -> str:
+    import torch
+
+    cuda_available = bool(torch.cuda.is_available())
+    if POLICE_ONLY_DEVICE_MODE == "cpu":
+        return "cpu"
+    if POLICE_ONLY_DEVICE_MODE == "cuda":
+        if not cuda_available:
+            raise RuntimeError(
+                "CARMATE_POLICE_ONLY_DETECT_DEVICE=cuda 但当前 PyTorch 无法使用 CUDA。"
+                "请检查 NVIDIA 驱动、CUDA 版 PyTorch，或改为 auto/cpu。"
+            )
+        return "cuda:0"
+    return "cuda:0" if cuda_available else "cpu"
 
 
 @dataclass
@@ -91,14 +113,20 @@ class PoliceOfficerDetector:
             raise RuntimeError("ultralytics is required for YOLO-World police-only mode") from exc
 
         self.classes, self.positive_classes, self.negative_classes = _env_classes()
+        self.device = _resolve_detect_device()
         self.model = YOLO(POLICE_ONLY_MODEL)
+        try:
+            self.model.to(self.device)
+        except Exception as exc:
+            logger.warning("Failed to move YOLO-World detector to %s: %s", self.device, exc)
         if hasattr(self.model, "set_classes"):
             self.model.set_classes(self.classes)
         else:
             raise RuntimeError("current ultralytics version does not support YOLO-World set_classes")
         logger.info(
-            "YOLO-World traffic-police detector loaded: model=%s, accept_conf=%.2f, margin=%.2f, positive=%s, negative=%s",
+            "YOLO-World traffic-police detector loaded: model=%s, device=%s, accept_conf=%.2f, margin=%.2f, positive=%s, negative=%s",
             POLICE_ONLY_MODEL,
+            self.device,
             POLICE_ONLY_CONF,
             POLICE_ONLY_POSITIVE_MARGIN,
             sorted(self.positive_classes),
@@ -110,7 +138,13 @@ class PoliceOfficerDetector:
             return PoliceOfficerDetection(False, error="empty image")
 
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        results = self.model.predict(img_rgb, conf=POLICE_ONLY_CANDIDATE_CONF, imgsz=POLICE_ONLY_IMGSZ, verbose=False)
+        results = self.model.predict(
+            img_rgb,
+            conf=POLICE_ONLY_CANDIDATE_CONF,
+            imgsz=POLICE_ONLY_IMGSZ,
+            device=self.device,
+            verbose=False,
+        )
         if not results:
             return PoliceOfficerDetection(False)
 
