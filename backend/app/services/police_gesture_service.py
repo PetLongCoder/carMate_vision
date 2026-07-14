@@ -519,12 +519,13 @@ def _police_detection_payload(
 def _create_tracker_with_fallback(img_bgr: np.ndarray, box_xyxy: list[float]):
     factories = []
     legacy = getattr(cv2, "legacy", None)
+    tracker_names = ("TrackerKCF_create", "TrackerMOSSE_create", "TrackerCSRT_create")
     if legacy is not None:
-        for name in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMOSSE_create"):
+        for name in tracker_names:
             factory = getattr(legacy, name, None)
             if callable(factory):
                 factories.append(factory)
-    for name in ("TrackerCSRT_create", "TrackerKCF_create", "TrackerMOSSE_create"):
+    for name in tracker_names:
         factory = getattr(cv2, name, None)
         if callable(factory):
             factories.append(factory)
@@ -632,7 +633,6 @@ def _refresh_police_detection_state(
         return None
 
     cached = dict(state) if state else _default_police_detection_state(frame_count)
-    should_detect = cached["raw_detection"] is None or frame_count % POLICE_ONLY_DETECT_INTERVAL == 1
     confirmed = bool(cached.get("confirmed", False))
     streak = int(cached.get("streak", 0))
     miss_streak = int(cached.get("miss_streak", 0))
@@ -643,6 +643,19 @@ def _refresh_police_detection_state(
     tracker_miss_streak = int(cached.get("tracker_miss_streak", 0))
     raw_detection = cached.get("raw_detection")
     display_detection = None
+
+    tracker_active = (
+        confirmed
+        and tracker is not None
+        and tracked_box is not None
+        and tracker_miss_streak <= POLICE_ONLY_HOLD_FRAMES
+    )
+    # 未确认时仍按间隔做 YOLO；确认后若 tracker 仍然有效，则只走 tracker。
+    should_detect = (
+        cached["raw_detection"] is None
+        or (not confirmed and frame_count % POLICE_ONLY_DETECT_INTERVAL == 1)
+        or (confirmed and not tracker_active)
+    )
 
     detection = detect_police_officer(img_bgr) if should_detect else None
     if detection is not None:
