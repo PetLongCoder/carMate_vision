@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.api.v1.auth import ok, require_admin
+from app.api.v1.auth import ok, require_current_user
 from app.core.database import get_db
 from app.models.db_models import AlertRecord, User
 from app.services.alert_agent import ANOMALY_TYPE_LABELS, SOURCE_LABELS
@@ -51,10 +51,16 @@ def get_alerts(
     page_size: int = Query(10, ge=1, le=100, alias="pageSize"),
     level: Optional[str] = None,
     acknowledged: Optional[bool] = None,
-    _: User = Depends(require_admin),
+    user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
+    """获取告警列表。管理员看所有告警，普通用户只看自己的告警。"""
     query = db.query(AlertRecord)
+    
+    # 普通用户只看自己的告警，管理员看所有
+    if user.role != "admin":
+        query = query.filter(AlertRecord.user_id == user.id)
+    
     if level:
         query = query.filter(AlertRecord.level == level)
     if acknowledged is not None:
@@ -73,15 +79,19 @@ def get_alerts(
 @router.put("/alerts/{alert_id}/acknowledge")
 def acknowledge_alert(
     alert_id: int,
-    admin: User = Depends(require_admin),
+    user: User = Depends(require_current_user),
     db: Session = Depends(get_db),
 ):
-    record = db.query(AlertRecord).filter(AlertRecord.id == alert_id).first()
+    """确认告警。用户只能确认自己的告警，管理员可以确认所有。"""
+    query = db.query(AlertRecord).filter(AlertRecord.id == alert_id)
+    if user.role != "admin":
+        query = query.filter(AlertRecord.user_id == user.id)
+    record = query.first()
     if not record:
-        return {"code": 404, "message": "告警不存在", "data": None}
+        return {"code": 404, "message": "告警不存在或无权操作", "data": None}
 
     record.acknowledged = True
-    record.acknowledged_by = admin.username
+    record.acknowledged_by = user.username
     record.acknowledged_at = datetime.now(timezone.utc)
     db.commit()
     return ok(None)
