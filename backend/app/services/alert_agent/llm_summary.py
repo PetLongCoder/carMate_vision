@@ -197,7 +197,22 @@ async def call_llm_api(prompt: str) -> Optional[dict]:
         logger.warning("httpx 未安装，无法调用 LLM API")
         return None
     except json.JSONDecodeError as e:
-        logger.warning(f"LLM 返回内容 JSON 解析失败: {e}")
+        logger.warning(f"LLM 返回内容 JSON 解析失败: {e}, 原始内容: {content[:300] if 'content' in dir() else 'N/A'}")
+        # 尝试修复常见 JSON 问题后再次解析
+        try:
+            if 'content' in dir() and content:
+                # 修复截断的 JSON
+                fixed = content.strip()
+                if not fixed.endswith('}'):
+                    last_brace = fixed.rfind('}')
+                    if last_brace > 0:
+                        fixed = fixed[:last_brace+1]
+                # 补全缺失的引号
+                if fixed.count('"') % 2 != 0:
+                    fixed = fixed + '"'
+                return json.loads(fixed)
+        except Exception:
+            pass
         return None
     except Exception as e:
         logger.warning(f"LLM API 调用异常: {e}")

@@ -37,7 +37,7 @@ const allMenuItems: Array<{
   { key: '/plate', icon: <CameraOutlined />, label: '车牌识别', roles: ['user', 'admin'] },
   { key: '/police-gesture', icon: <HighlightOutlined />, label: '交警手势', roles: ['user', 'admin'] },
   { key: '/driver-gesture', icon: <AimOutlined />, label: '车主手势', roles: ['user', 'admin'] },
-  { key: '/alerts', icon: <AlertOutlined />, label: '告警中心', roles: ['admin'] },
+  { key: '/alerts', icon: <AlertOutlined />, label: '告警中心', roles: ['user', 'admin'] },
   { key: '/alerts/dashboard', icon: <DashboardOutlined />, label: '告警仪表盘', roles: ['user', 'admin'] },
   { key: '/alerts/timeline', icon: <FieldTimeOutlined />, label: '告警时间线', roles: ['user', 'admin'] },
   { key: '/alerts/analysis', icon: <PieChartOutlined />, label: '告警分析', roles: ['user', 'admin'] },

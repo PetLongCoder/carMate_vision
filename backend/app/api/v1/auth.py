@@ -185,6 +185,7 @@ def require_admin(user: User = Depends(require_current_user)) -> User:
             title="未授权访问：非管理员尝试访问管理功能",
             detail={"username": user.username, "role": user.role},
             severity_hint=AlertLevel.WARNING,
+            user_id=user.id,
         ))
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return user
@@ -344,6 +345,7 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
             anomaly_type="auth_login_failure",
             title="登录失败：密码错误",
             detail={"username": body.username, "method": "password"},
+            user_id=user.id,
         ))
         return fail("密码错误")
     if body.portal == "user" and user.role == "admin":

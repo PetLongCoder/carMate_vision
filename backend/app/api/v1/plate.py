@@ -76,6 +76,7 @@ async def recognize_plate(
             title="车牌识别模块加载失败",
             detail={"error": str(exc), "filename": file.filename},
             severity_hint=AlertLevel.CRITICAL,
+            user_id=user.id if user else None,
         ))
         raise HTTPException(status_code=503, detail="车牌识别模块未就绪，请稍后重试") from exc
 
@@ -100,6 +101,7 @@ async def recognize_plate(
                 anomaly_type="plate_frame_decode_failure",
                 title="图片解码失败",
                 detail={"filename": file.filename, "ext": ext},
+                user_id=user.id if user else None,
             ))
             raise HTTPException(
                 status_code=400, detail="无法解码图片, 请上传 JPG/PNG 格式"
