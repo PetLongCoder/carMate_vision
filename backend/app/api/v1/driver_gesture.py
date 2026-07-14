@@ -50,7 +50,7 @@ ACTION_MAP = {
     "rotate_ccw": ControlAction(type="temperature_down", label="温度调低"),
 }
 
-def _get_tracker():
+def _get_tracker(user_id: int | None = None):
     global _tracker
     if _tracker is None:
         try:
@@ -64,6 +64,7 @@ def _get_tracker():
                 title="车主手势模型加载失败",
                 detail={"error": str(exc)},
                 severity_hint=AlertLevel.CRITICAL,
+                user_id=user_id,
             ))
             raise HTTPException(status_code=503, detail="车主手势识别模块未就绪，请稍后重试") from exc
     return _tracker
@@ -138,7 +139,7 @@ async def recognize_driver_gesture(
     if not image_bytes:
         raise HTTPException(status_code=400, detail="上传的文件为空")
 
-    gesture_key, confidence, landmarks = _get_tracker().process_frame(image_bytes)
+    gesture_key, confidence, landmarks = _get_tracker(user_id=user.id if user else None).process_frame(image_bytes)
 
     gesture_info = GESTURE_MAP.get(gesture_key, GESTURE_MAP["unknown"])
     gesture_name = gesture_info["name"]
@@ -240,7 +241,7 @@ async def recognize_driver_gesture(
 @router.post("/driver-gesture/reset")
 async def reset_gesture_tracker():
     global _current_gesture_key, _current_start_time, _current_count, _last_play_state
-    _get_tracker().reset_state()
+    _get_tracker(user_id=None).reset_state()
     _current_gesture_key = None
     _current_start_time = 0
     _current_count = 0
