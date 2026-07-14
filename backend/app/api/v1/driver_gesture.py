@@ -155,6 +155,7 @@ async def recognize_driver_gesture(
             anomaly_type="driver_gesture_low_confidence",
             title="车主手势置信度偏低",
             detail={"gesture_key": gesture_key, "confidence": round(confidence, 4)},
+            user_id=user.id if user else None,
         ))
 
     result = DriverGestureResult(

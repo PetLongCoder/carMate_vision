@@ -145,6 +145,7 @@ async def recognize_police_gesture(
             title="交警手势识别失败",
             detail={"error": str(exc), "filename": file.filename},
             severity_hint=AlertLevel.WARNING,
+            user_id=user.id if user else None,
         ))
         raise HTTPException(500, f"识别失败: {str(exc)}")
 

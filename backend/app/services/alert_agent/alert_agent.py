@@ -197,7 +197,7 @@ class AlertAgent:
                 summary=summary_data.get("summary", ""),
                 source=event.source,
                 anomaly_type=event.anomaly_type,
-                user_id=event.user_id if event.user_id else None,
+                user_id=event.user_id,
                 impact_scope=summary_data.get("impact_scope", event.source_label),
                 suggested_actions=suggested_actions_json,
                 raw_event=json.dumps(event.detail, ensure_ascii=False),
@@ -271,9 +271,7 @@ class AlertAgent:
 
         def _user_filter(query):
             if user_id is not None:
-                return query.filter(
-                    (AlertRecord.user_id == user_id) | (AlertRecord.user_id.is_(None))
-                )
+                return query.filter(AlertRecord.user_id == user_id)
             return query
 
         # 按级别统计
