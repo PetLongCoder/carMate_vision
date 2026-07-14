@@ -50,7 +50,13 @@ const AlertCenter: React.FC = () => {
       setAlerts(data.data.data.list);
       setTotal(data.data.data.total);
     } catch (err) {
-      message.error(err instanceof Error ? err.message : '加载告警失败');
+      // 普通用户无权限时静默处理
+      if (err instanceof Error && err.message === '需要管理员权限') {
+        setAlerts([]);
+        setTotal(0);
+      } else {
+        message.error(err instanceof Error ? err.message : '加载告警失败');
+      }
     } finally {
       setLoading(false);
     }
