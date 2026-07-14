@@ -56,6 +56,7 @@ class AnomalyEvent:
     detail: dict = field(default_factory=dict)     # 详细信息
     timestamp: float = field(default_factory=time.time)
     severity_hint: Optional[AlertLevel] = None     # 建议告警级别
+    user_id: Optional[int] = None                  # 关联用户 ID（系统级告警为 None）
 
     @property
     def source_label(self) -> str:

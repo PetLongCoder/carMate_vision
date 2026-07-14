@@ -23,6 +23,13 @@ from app.utils.logger import logger
 router = APIRouter()
 
 
+def _apply_user_filter(query, user: User):
+    """对查询应用用户过滤：管理员看所有，普通用户只看自己的告警。"""
+    if user.role != "admin":
+        return query.filter(AlertRecord.user_id == user.id)
+    return query
+
+
 def alert_to_dict(record: AlertRecord) -> dict:
     """将 AlertRecord 转换为前端友好的字典"""
     suggested_actions = []
@@ -66,11 +73,11 @@ def get_alert_stats(
     user: User | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取告警统计数据（仪表盘用）"""
+    """获取告警统计数据（仪表盘用）。管理员看所有，普通用户只看自己的。"""
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="未登录")
-    stats = alert_agent.get_stats(db, days=days)
+    stats = alert_agent.get_stats(db, days=days, user_id=None if user.role == "admin" else user.id)
     return ok(stats)
 
 
@@ -89,11 +96,14 @@ def get_alert_timeline(
     user: User | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取告警时间线（时间倒序，支持筛选）"""
+    """获取告警时间线（时间倒序，支持筛选）。管理员看所有，普通用户只看自己的。"""
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="未登录")
     query = db.query(AlertRecord)
+
+    # 用户过滤
+    query = _apply_user_filter(query, user)
 
     if level:
         query = query.filter(AlertRecord.level == level)
@@ -136,11 +146,14 @@ def get_alert_detail(
     user: User | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取告警完整详情，包含原始事件数据用于回放"""
+    """获取告警完整详情，包含原始事件数据用于回放。管理员看所有，普通用户只看自己的。"""
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="未登录")
-    record = db.query(AlertRecord).filter(AlertRecord.id == alert_id).first()
+    
+    query = db.query(AlertRecord).filter(AlertRecord.id == alert_id)
+    query = _apply_user_filter(query, user)
+    record = query.first()
     if not record:
         return {"code": 404, "message": "告警不存在", "data": None}
 
@@ -158,7 +171,7 @@ def get_alert_detail(
 
     # 查找相关告警（同类型，前后 1 小时内）
     if record.anomaly_type and record.created_at:
-        related = (
+        related_query = (
             db.query(AlertRecord)
             .filter(
                 AlertRecord.anomaly_type == record.anomaly_type,
@@ -166,6 +179,10 @@ def get_alert_detail(
                 AlertRecord.created_at >= record.created_at - timedelta(hours=1),
                 AlertRecord.created_at <= record.created_at + timedelta(hours=1),
             )
+        )
+        related_query = _apply_user_filter(related_query, user)
+        related = (
+            related_query
             .order_by(AlertRecord.created_at.desc())
             .limit(10)
             .all()
@@ -185,14 +202,14 @@ def get_alert_analysis(
     user: User | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取告警原因分析聚合数据"""
+    """获取告警原因分析聚合数据。管理员看所有，普通用户只看自己的。"""
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="未登录")
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     # 异常类型频率排名
-    type_rows = (
+    type_query = (
         db.query(
             AlertRecord.anomaly_type,
             func.count(AlertRecord.id).label("count"),
@@ -201,6 +218,10 @@ def get_alert_analysis(
             AlertRecord.anomaly_type.isnot(None),
             AlertRecord.created_at >= cutoff,
         )
+    )
+    type_query = _apply_user_filter(type_query, user)
+    type_rows = (
+        type_query
         .group_by(AlertRecord.anomaly_type)
         .order_by(func.count(AlertRecord.id).desc())
         .all()
@@ -215,7 +236,7 @@ def get_alert_analysis(
     ]
 
     # 来源模块告警分布
-    source_rows = (
+    source_query = (
         db.query(
             AlertRecord.source,
             func.count(AlertRecord.id).label("count"),
@@ -224,6 +245,10 @@ def get_alert_analysis(
             AlertRecord.source.isnot(None),
             AlertRecord.created_at >= cutoff,
         )
+    )
+    source_query = _apply_user_filter(source_query, user)
+    source_rows = (
+        source_query
         .group_by(AlertRecord.source)
         .order_by(func.count(AlertRecord.id).desc())
         .all()
@@ -238,12 +263,16 @@ def get_alert_analysis(
     ]
 
     # 按小时分布（峰值时段）
-    hour_rows = (
+    hour_query = (
         db.query(
             func.hour(AlertRecord.created_at).label("hour"),
             func.count(AlertRecord.id).label("count"),
         )
         .filter(AlertRecord.created_at >= cutoff)
+    )
+    hour_query = _apply_user_filter(hour_query, user)
+    hour_rows = (
+        hour_query
         .group_by("hour")
         .order_by("hour")
         .all()
@@ -253,13 +282,19 @@ def get_alert_analysis(
     ]
 
     # 确认率
-    total = db.query(func.count(AlertRecord.id)).filter(
-        AlertRecord.created_at >= cutoff
-    ).scalar() or 0
-    acknowledged = db.query(func.count(AlertRecord.id)).filter(
-        AlertRecord.created_at >= cutoff,
-        AlertRecord.acknowledged.is_(True),
-    ).scalar() or 0
+    total_q = _apply_user_filter(
+        db.query(func.count(AlertRecord.id)).filter(AlertRecord.created_at >= cutoff),
+        user,
+    )
+    total = total_q.scalar() or 0
+    ack_q = _apply_user_filter(
+        db.query(func.count(AlertRecord.id)).filter(
+            AlertRecord.created_at >= cutoff,
+            AlertRecord.acknowledged.is_(True),
+        ),
+        user,
+    )
+    acknowledged = ack_q.scalar() or 0
     ack_rate = round(acknowledged / total * 100, 1) if total > 0 else 0
 
     return ok({

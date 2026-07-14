@@ -197,6 +197,7 @@ class AlertAgent:
                 summary=summary_data.get("summary", ""),
                 source=event.source,
                 anomaly_type=event.anomaly_type,
+                user_id=event.user_id,
                 impact_scope=summary_data.get("impact_scope", event.source_label),
                 suggested_actions=suggested_actions_json,
                 raw_event=json.dumps(event.detail, ensure_ascii=False),
@@ -259,24 +260,32 @@ class AlertAgent:
 
     # ── 统计查询 ──
 
-    def get_stats(self, db: Session, days: int = 7) -> dict:
-        """获取告警统计数据"""
+    def get_stats(self, db: Session, days: int = 7, user_id: int | None = None) -> dict:
+        """获取告警统计数据。
+        
+        Args:
+            user_id: 若传入则只统计该用户的告警；若为 None 则统计所有（管理员视角）
+        """
         cutoff = datetime.now(timezone.utc)
         start_date = cutoff - __import__("datetime").timedelta(days=days)
+
+        def _user_filter(query):
+            if user_id is not None:
+                return query.filter(AlertRecord.user_id == user_id)
+            return query
 
         # 按级别统计
         total_by_level = {}
         for level in ("info", "warning", "critical"):
-            total_by_level[level] = (
-                db.query(func.count(AlertRecord.id))
-                .filter(AlertRecord.level == level)
-                .scalar() or 0
-            )
+            q = db.query(func.count(AlertRecord.id)).filter(AlertRecord.level == level)
+            total_by_level[level] = _user_filter(q).scalar() or 0
 
         # 按异常类型统计
         type_rows = (
-            db.query(AlertRecord.anomaly_type, func.count(AlertRecord.id))
-            .filter(AlertRecord.anomaly_type.isnot(None))
+            _user_filter(
+                db.query(AlertRecord.anomaly_type, func.count(AlertRecord.id))
+                .filter(AlertRecord.anomaly_type.isnot(None))
+            )
             .group_by(AlertRecord.anomaly_type)
             .all()
         )
@@ -284,12 +293,14 @@ class AlertAgent:
 
         # 每日趋势
         daily = (
-            db.query(
-                func.date(AlertRecord.created_at).label("day"),
-                AlertRecord.level,
-                func.count(AlertRecord.id),
+            _user_filter(
+                db.query(
+                    func.date(AlertRecord.created_at).label("day"),
+                    AlertRecord.level,
+                    func.count(AlertRecord.id),
+                )
+                .filter(AlertRecord.created_at >= start_date)
             )
-            .filter(AlertRecord.created_at >= start_date)
             .group_by("day", AlertRecord.level)
             .order_by("day")
             .all()
@@ -306,28 +317,32 @@ class AlertAgent:
         # 总数 / 未确认 / 今日
         total = sum(total_by_level.values())
         unack = (
-            db.query(func.count(AlertRecord.id))
-            .filter(AlertRecord.acknowledged.is_(False))
-            .scalar() or 0
+            _user_filter(
+                db.query(func.count(AlertRecord.id))
+                .filter(AlertRecord.acknowledged.is_(False))
+            ).scalar() or 0
         )
         today_count = (
-            db.query(func.count(AlertRecord.id))
-            .filter(func.date(AlertRecord.created_at) == date.today())
-            .scalar() or 0
+            _user_filter(
+                db.query(func.count(AlertRecord.id))
+                .filter(func.date(AlertRecord.created_at) == date.today())
+            ).scalar() or 0
         )
 
         # 平均确认时间（分钟）
-        avg_ack = db.query(
-            func.avg(
-                func.timestampdiff(
-                    __import__("sqlalchemy").text("MINUTE"),
-                    AlertRecord.created_at,
-                    AlertRecord.acknowledged_at,
+        avg_ack = _user_filter(
+            db.query(
+                func.avg(
+                    func.timestampdiff(
+                        __import__("sqlalchemy").text("MINUTE"),
+                        AlertRecord.created_at,
+                        AlertRecord.acknowledged_at,
+                    )
                 )
+            ).filter(
+                AlertRecord.acknowledged.is_(True),
+                AlertRecord.acknowledged_at.isnot(None),
             )
-        ).filter(
-            AlertRecord.acknowledged.is_(True),
-            AlertRecord.acknowledged_at.isnot(None),
         ).scalar()
         avg_response = round(float(avg_ack), 1) if avg_ack else 0
 

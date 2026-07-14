@@ -70,6 +70,7 @@ class AlertRecord(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     summary: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(100))
+    user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True, comment="关联用户 ID，系统级告警为 NULL")
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     acknowledged_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
