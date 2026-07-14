@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Row, Col, Card, Typography, Spin, Button, Table, Tag, Progress } from 'antd';
-import { ReloadOutlined, WarningOutlined } from '@ant-design/icons';
+import { ReloadOutlined, WarningOutlined, PieChartOutlined } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { PageHeader } from '../components/common';
 import { getAlertAnalysis } from '../api';
@@ -37,7 +37,7 @@ const AlertAnalysisPage: React.FC = () => {
     );
   }
 
-  if (error || !data) {
+  if (error) {
     return (
       <div style={{ textAlign: 'center', padding: 100 }}>
         <Typography.Text type="danger">加载分析数据失败，请确认后端服务已启动</Typography.Text>
@@ -47,6 +47,17 @@ const AlertAnalysisPage: React.FC = () => {
       </div>
     );
   }
+
+  if (!data) {
+    return (
+      <div style={{ textAlign: 'center', padding: 100 }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: '#999' }}>加载告警分析数据...</div>
+      </div>
+    );
+  }
+
+  const hasData = data.total > 0;
 
   const ackRate = data.ackRate || 0;
 
@@ -116,6 +127,18 @@ const AlertAnalysisPage: React.FC = () => {
         }
       />
 
+      {!hasData && (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <PieChartOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />
+          <Typography.Paragraph type="secondary" style={{ marginTop: 16, fontSize: 16 }}>
+            暂无告警数据可分析
+          </Typography.Paragraph>
+          <Typography.Text type="secondary">系统运行正常，当前用户暂无告警记录</Typography.Text>
+        </div>
+      )}
+
+      {hasData && (
+        <>
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
         <Col xs={12} sm={6}>
           <Card>
@@ -197,6 +220,8 @@ const AlertAnalysisPage: React.FC = () => {
           ]}
         />
       </Card>
+        </>
+      )}
     </div>
   );
 };

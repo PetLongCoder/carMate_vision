@@ -51,7 +51,7 @@ const AlertDashboard: React.FC = () => {
     );
   }
 
-  if (error || !stats) {
+  if (error) {
     return (
       <div style={{ textAlign: 'center', padding: 100 }}>
         <Typography.Text type="danger">加载告警数据失败，请确认后端服务已启动</Typography.Text>
@@ -61,6 +61,18 @@ const AlertDashboard: React.FC = () => {
       </div>
     );
   }
+
+  if (!stats) {
+    return (
+      <div style={{ textAlign: 'center', padding: 100 }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: '#999' }}>加载告警统计数据...</div>
+      </div>
+    );
+  }
+
+  // 即使是 0 也要显示空状态
+  const hasData = stats.total > 0;
 
   const levelPieOption = {
     tooltip: { trigger: 'item' },
@@ -147,6 +159,18 @@ const AlertDashboard: React.FC = () => {
         }
       />
 
+      {!hasData && (
+        <div style={{ textAlign: 'center', padding: 60 }}>
+          <AlertOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />
+          <Typography.Paragraph type="secondary" style={{ marginTop: 16, fontSize: 16 }}>
+            暂无告警记录
+          </Typography.Paragraph>
+          <Typography.Text type="secondary">当前用户尚未触发任何告警事件</Typography.Text>
+        </div>
+      )}
+
+      {hasData && (
+        <>
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={6}>
           <Card hoverable onClick={() => navigate('/alerts')}>
@@ -205,6 +229,8 @@ const AlertDashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
+        </>
+      )}
     </div>
   );
 };
