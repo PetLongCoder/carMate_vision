@@ -24,9 +24,11 @@ router = APIRouter()
 
 
 def _apply_user_filter(query, user: User):
-    """对查询应用用户过滤：管理员看所有，普通用户只看自己的告警。"""
+    """对查询应用用户过滤：管理员看所有，普通用户看所有系统告警 + 自己的告警。"""
     if user.role != "admin":
-        return query.filter(AlertRecord.user_id == user.id)
+        return query.filter(
+            (AlertRecord.user_id == user.id) | (AlertRecord.user_id.is_(None))
+        )
     return query
 
 
@@ -73,7 +75,7 @@ def get_alert_stats(
     user: User | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """获取告警统计数据（仪表盘用）。管理员看所有，普通用户只看自己的。"""
+    """获取告警统计数据（仪表盘用）。管理员看所有，普通用户看系统告警 + 自己的。"""
     if user is None:
         from fastapi import HTTPException
         raise HTTPException(status_code=401, detail="未登录")
